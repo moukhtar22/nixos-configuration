@@ -1,0 +1,13 @@
+- name: YouTube
+  icon: youtube.png
+  command: xdg-open https://www.youtube.com
+
+- name: OneNote
+  icon: onenote.png
+  command: xdg-open https://www.onenote.com
+
+- name: Reload Hyprland
+  icon: hyprland.png
+  command: hyprctl reload
+
+

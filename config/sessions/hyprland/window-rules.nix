@@ -7,6 +7,8 @@ wayland.windowManager.hyprland.settings = {
     "noanim, ^(brightness_osd)$"
     "noanim, ^(music_win)$"
     "noanim, ^(usb_popup)$"
+    "noanim, ^(calendar_win)$"
+    "noanim, ^(network_win)$"
     "noanim, hyprpicker"
     "noanim, selection"
   ];

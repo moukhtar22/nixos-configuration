@@ -10,7 +10,7 @@
 	 "rm /tmp/eww* -R"
 	 "systemctl --user enable --now easyeffects"
 	 # "bash ${./scripts/bluetooth_mgr.sh} --daemon"
-	 "bash ${./scripts/usb.sh}"
+         # "bash ${./scripts/usb.sh}"
       ];
    };
 }

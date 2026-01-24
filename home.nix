@@ -8,6 +8,7 @@
     ./config/programs/waybar/default.nix
     ./config/programs/eww/default.nix
     ./config/programs/rofi/default.nix
+    ./config/programs/swaync/default.nix
 
     # sessions
     ./config/sessions/hyprland/default.nix

@@ -37,6 +37,7 @@
     gnome-shell-extensions
     grim
     playerctl
+    yq-go
     xdg-desktop-portal-gtk
     eww
     gnome-tweaks
@@ -55,7 +56,7 @@
   users.users.ilyamiro = {
     isNormalUser = true;
     description = "ilyamiro";
-    extraGroups = [ "networkmanager" "wheel" "video" ]; # Added "video" group
+    extraGroups = [ "networkmanager" "wheel" "video" "adbusers"]; # Added "video" group
     packages = with pkgs; [
     #  thunderbird
     ];
@@ -78,8 +79,13 @@
     }
   ];
 
+  services.logind.settings.Login = {
+    HandlePowerKey = "ignore";
+  }; 
   # Program configurations
   programs.zsh.enable = true;
+
+  programs.adb.enable = true;
 
   # Install firefox.
   programs.firefox.enable = true;
@@ -103,6 +109,8 @@
 
   # Desktop environment, window managers and theme
   services.xserver.enable = true;
+
+  
 
   # Enable the GNOME Desktop Environment.
   services.displayManager.gdm.enable = true;
@@ -178,6 +186,7 @@
     alsa.support32Bit = true;
     pulse.enable = true;
   };
+  services.blueman.enable = true;
 
   # Enable CUPS to print documents.
   services.printing.enable = true;

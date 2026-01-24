@@ -15,7 +15,13 @@
     cd() {
       builtin cd $@ &&
       ls
-    } 
+    }
+
+    pasteimg() {
+        local name="''${1:-clipboard.png}"
+        [[ "$name" != *.png ]] && name="$name.png"
+        wl-paste --type image/png | sudo tee "$name" > /dev/null
+    }
     '';
 
     shellAliases = {
