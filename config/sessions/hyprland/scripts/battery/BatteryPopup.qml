@@ -8,8 +8,8 @@ FloatingWindow {
     id: window
 
     title: "battery-popup"
-    width: 420
-    height: 580
+    width: 480
+    height: 680
     color: "transparent"
 
     Shortcut { sequence: "Escape"; onActivated: Qt.quit() }
@@ -26,6 +26,7 @@ FloatingWindow {
     readonly property color overlay1: "#7f849c"
     readonly property color surface0: "#313244"
     readonly property color surface1: "#45475a"
+    readonly property color surface2: "#585b70"
     
     readonly property color mauve: "#cba6f7"
     readonly property color pink: "#f5c2e7"
@@ -44,7 +45,9 @@ FloatingWindow {
     property int batCapacity: 0
     property string batStatus: "Unknown"
     property string powerProfile: "balanced"
-    property string uptimeStr: "0h 0m"
+    
+    property int upHours: 0
+    property int upMins: 0
 
     readonly property bool isCharging: batStatus === "Charging"
 
@@ -57,7 +60,7 @@ FloatingWindow {
         return window.red;
     }
 
-    // 2. WINDOW AURA COLORS
+    // 2. WINDOW AURA COLORS (Matches Power Profile)
     readonly property color profileStart: {
         if (powerProfile === "performance") return window.red;
         if (powerProfile === "power-saver") return window.green;
@@ -70,10 +73,12 @@ FloatingWindow {
         return window.sapphire;
     }
 
-    // Smooth, non-bouncy sweeping animation for the battery ring
+    readonly property color activeColor: profileStart
+    readonly property color activeGradientSecondary: profileEnd
+
     property real animCapacity: 0
     Behavior on animCapacity {
-        NumberAnimation { duration: 1200; easing.type: Easing.OutExpo }
+        NumberAnimation { duration: 1200; easing.type: Easing.OutQuint }
     }
     
     onAnimCapacityChanged: batCanvas.requestPaint()
@@ -87,666 +92,657 @@ FloatingWindow {
             onStreamFinished: {
                 let lines = this.text.trim().split("\n")
                 if (lines.length >= 4) {
-                    window.batCapacity = parseInt(lines[0])
-                    window.animCapacity = window.batCapacity
+                    if (window.batCapacity !== parseInt(lines[0])) {
+                        window.batCapacity = parseInt(lines[0])
+                        window.animCapacity = window.batCapacity
+                    }
                     window.batStatus = lines[1]
                     window.powerProfile = lines[2]
-                    window.uptimeStr = lines[3]
+                    
+                    let upParts = lines[3].split("h ");
+                    if (upParts.length === 2) {
+                        window.upHours = parseInt(upParts[0]) || 0;
+                        window.upMins = parseInt(upParts[1].replace("m", "")) || 0;
+                    }
                 }
             }
         }
     }
 
     Timer {
-        interval: 2000
-        running: true
-        repeat: true
+        interval: 2000; running: true; repeat: true
         onTriggered: sysPoller.running = true
     }
 
-    // -------------------------------------------------------------------------
-    // STAGGERED INTRO ANIMATION CONTROLLER
-    // -------------------------------------------------------------------------
+    property real globalOrbitAngle: 0
+    NumberAnimation on globalOrbitAngle {
+        from: 0; to: Math.PI * 2; duration: 90000; loops: Animation.Infinite; running: true
+    }
+
     property real introState: 0.0
     Component.onCompleted: introState = 1.0
-    Behavior on introState { NumberAnimation { duration: 900; easing.type: Easing.OutExpo } }
+    Behavior on introState { NumberAnimation { duration: 800; easing.type: Easing.OutQuint } }
 
     // -------------------------------------------------------------------------
     // UI LAYOUT
     // -------------------------------------------------------------------------
     Item {
         anchors.fill: parent
-        scale: 0.85 + (0.15 * introState)
+        scale: 0.95 + (0.05 * introState)
         opacity: introState
 
-        // Outer Glow / Border
+        // Outer Border
         Rectangle {
             anchors.fill: parent
-            radius: 24
+            radius: 30
+            color: window.base
+            border.color: window.surface0
+            border.width: 1
+            clip: true
+
+            // Rotating Background Blobs
+            Rectangle {
+                width: parent.width * 0.8; height: width; radius: width / 2
+                x: (parent.width / 2 - width / 2) + Math.cos(window.globalOrbitAngle * 2) * 150
+                y: (parent.height / 2 - height / 2) + Math.sin(window.globalOrbitAngle * 2) * 100
+                opacity: 0.08
+                color: window.activeColor
+                Behavior on color { ColorAnimation { duration: 1000 } }
+            }
             
-            gradient: Gradient {
-                orientation: Gradient.Vertical
-                GradientStop { position: 0.0; color: window.profileStart; Behavior on color { ColorAnimation { duration: 600; easing.type: Easing.OutQuad } } }
-                GradientStop { position: 1.0; color: window.profileEnd; Behavior on color { ColorAnimation { duration: 600; easing.type: Easing.OutQuad } } }
+            Rectangle {
+                width: parent.width * 0.9; height: width; radius: width / 2
+                x: (parent.width / 2 - width / 2) + Math.sin(window.globalOrbitAngle * 1.5) * -150
+                y: (parent.height / 2 - height / 2) + Math.cos(window.globalOrbitAngle * 1.5) * -100
+                opacity: 0.06
+                color: window.activeGradientSecondary
+                Behavior on color { ColorAnimation { duration: 1000 } }
             }
 
-            Rectangle {
+            // Radar Rings
+            Item {
+                id: radarItem
                 anchors.fill: parent
-                anchors.margins: 2
-                radius: 22
-                color: window.base
-                clip: true
+                
+                Repeater {
+                    model: 3
+                    Rectangle {
+                        anchors.centerIn: parent
+                        anchors.verticalCenterOffset: -30
+                        width: 320 + (index * 170)
+                        height: width
+                        radius: width / 2
+                        color: "transparent"
+                        border.color: window.activeColor
+                        border.width: 1
+                        Behavior on border.color { ColorAnimation { duration: 1000 } }
+                        opacity: 0.06 - (index * 0.02)
+                    }
+                }
+            }
 
+            // ==========================================
+            // TOP: UPTIME COMPONENT
+            // ==========================================
+            Row {
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.margins: 25
+                spacing: 6
+                
+                transform: Translate { y: -15 * (1.0 - introState) }
+                opacity: introState
+
+                // Hours Box
                 Rectangle {
-                    anchors.fill: parent
-                    opacity: 0.08
-                    gradient: Gradient {
-                        orientation: Gradient.Vertical
-                        GradientStop { position: 0.0; color: window.profileStart; Behavior on color { ColorAnimation { duration: 600 } } }
-                        GradientStop { position: 1.0; color: window.profileEnd; Behavior on color { ColorAnimation { duration: 600 } } }
+                    width: 44; height: 48; radius: 12
+                    color: "#0dffffff"; border.color: "#1affffff"; border.width: 1
+                    
+                    Rectangle { anchors.fill: parent; radius: 12; color: window.activeColor; opacity: 0.05; Behavior on color { ColorAnimation { duration: 1000 } } }
+
+                    Column {
+                        anchors.centerIn: parent
+                        Text { 
+                            text: window.upHours.toString().padStart(2, '0')
+                            font.pixelSize: 18; font.family: "JetBrains Mono"; font.weight: Font.Black
+                            color: window.activeColor
+                            Behavior on color { ColorAnimation { duration: 1000 } }
+                            anchors.horizontalCenter: parent.horizontalCenter 
+                        }
+                        Text { 
+                            text: "HR"; font.pixelSize: 8; font.family: "JetBrains Mono"; font.weight: Font.Bold
+                            color: window.subtext0; anchors.horizontalCenter: parent.horizontalCenter 
+                        }
                     }
                 }
 
-                // ==========================================
-                // TOP BAR
-                // ==========================================
-                Item {
-                    anchors.top: parent.top
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    height: 80
-                    z: 100
+                // Pulsing Colon
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: ":"
+                    font.pixelSize: 22; font.family: "JetBrains Mono"; font.weight: Font.Black
+                    color: window.activeColor
+                    Behavior on color { ColorAnimation { duration: 1000 } }
+                    
+                    opacity: uptimePulse
+                    property real uptimePulse: 1.0
+                    SequentialAnimation on uptimePulse {
+                        loops: Animation.Infinite; running: true
+                        NumberAnimation { to: 0.2; duration: 800; easing.type: Easing.InOutSine }
+                        NumberAnimation { to: 1.0; duration: 800; easing.type: Easing.InOutSine }
+                    }
+                }
 
-                    RowLayout {
-                        id: uptimeRow
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.margins: 20
-                        spacing: 8
+                // Mins Box
+                Rectangle {
+                    width: 44; height: 48; radius: 12
+                    color: "#0dffffff"; border.color: "#1affffff"; border.width: 1
+                    
+                    Rectangle { anchors.fill: parent; radius: 12; color: window.activeGradientSecondary; opacity: 0.05; Behavior on color { ColorAnimation { duration: 1000 } } }
+
+                    Column {
+                        anchors.centerIn: parent
+                        Text { 
+                            text: window.upMins.toString().padStart(2, '0')
+                            font.pixelSize: 18; font.family: "JetBrains Mono"; font.weight: Font.Black
+                            color: window.activeGradientSecondary
+                            Behavior on color { ColorAnimation { duration: 1000 } }
+                            anchors.horizontalCenter: parent.horizontalCenter 
+                        }
+                        Text { 
+                            text: "MIN"; font.pixelSize: 8; font.family: "JetBrains Mono"; font.weight: Font.Bold
+                            color: window.subtext0; anchors.horizontalCenter: parent.horizontalCenter 
+                        }
+                    }
+                }
+            }
+
+            // Simple top-right logout icon
+            Rectangle {
+                anchors.top: parent.top; anchors.right: parent.right
+                anchors.margins: 25
+                width: 44; height: 44; radius: 22
+                color: logoutMa.containsMouse ? "#1affffff" : "transparent"
+                border.color: logoutMa.containsMouse ? "#33ffffff" : "transparent"
+                Behavior on color { ColorAnimation { duration: 150 } }
+                
+                Text {
+                    anchors.centerIn: parent
+                    font.family: "Iosevka Nerd Font"; font.pixelSize: 18
+                    color: logoutMa.containsMouse ? window.red : window.overlay0
+                    text: "󰍃"
+                    Behavior on color { ColorAnimation { duration: 150 } }
+                }
+                MouseArea {
+                    id: logoutMa
+                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: { Quickshell.execDetached(["sh", "-c", "loginctl terminate-user $USER"]); Qt.quit(); }
+                }
+            }
+
+            // ==========================================
+            // CENTRAL CORE & BATTERY RING (OPTIMIZED)
+            // ==========================================
+            Item {
+                anchors.fill: parent
+                z: 1
+
+                Rectangle {
+                    id: centralCore
+                    width: 260
+                    height: width
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: -30
+                    radius: width / 2
+
+                    // Elegant, non-bouncy swell on hover
+                    scale: heroMa.containsMouse ? 1.04 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 500; easing.type: Easing.OutQuint } }
+
+                    gradient: Gradient {
+                        orientation: Gradient.Vertical
+                        GradientStop { position: 0.0; color: window.surface0 }
+                        GradientStop { position: 1.0; color: window.base }
+                    }
+
+                    border.color: window.activeColor
+                    border.width: 1
+                    Behavior on border.color { ColorAnimation { duration: 1000 } }
+
+                    // Soft rotating liquid glow inside the orb
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        radius: width / 2
+                        opacity: heroMa.containsMouse ? 0.3 : 0.15
+                        Behavior on opacity { NumberAnimation { duration: 400; easing.type: Easing.OutQuint } }
                         
-                        scale: uptimeMa.containsMouse ? 1.05 : 1.0
-                        Behavior on scale { NumberAnimation { duration: 250; easing.type: Easing.OutBack } }
-
-                        MouseArea {
-                            id: uptimeMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
+                        RotationAnimation on rotation {
+                            from: 0; to: 360; duration: 15000; loops: Animation.Infinite; running: true
                         }
                         
-                        Text {
-                            font.family: "Iosevka Nerd Font"
-                            font.pixelSize: 18
-                            color: uptimeMa.containsMouse ? window.mauve : window.overlay0
-                            text: "󰔚"
-                            Behavior on color { ColorAnimation { duration: 200 } }
-                        }
-                        Text {
-                            font.family: "JetBrains Mono"
-                            font.weight: Font.Bold
-                            font.pixelSize: 12
-                            color: uptimeMa.containsMouse ? window.mauve : window.subtext0
-                            text: "UP " + window.uptimeStr
-                            Behavior on color { ColorAnimation { duration: 200 } }
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: window.batColor; Behavior on color { ColorAnimation { duration: 800 } } }
+                            GradientStop { position: 1.0; color: "transparent" }
                         }
                     }
 
-                    Rectangle {
-                        id: logoutBtn
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.margins: 20
+                    // Battery Canvas Layer (Removed shadowBlur and gradients for maximum FPS)
+                    Item {
+                        anchors.fill: parent
                         
-                        width: logoutMa.containsMouse ? 110 : 40
-                        height: 40
-                        radius: 20
-                        color: logoutMa.containsMouse ? "#1affffff" : "transparent"
-                        border.color: logoutMa.containsMouse ? "#33ffffff" : "transparent"
-                        
-                        Behavior on width { NumberAnimation { duration: 300; easing.type: Easing.OutExpo } }
-                        Behavior on color { ColorAnimation { duration: 150 } }
-                        clip: true
+                        property real textPulse: 0.0
+                        SequentialAnimation on textPulse {
+                            loops: Animation.Infinite; running: true
+                            NumberAnimation { from: 0.0; to: 1.0; duration: 1200; easing.type: Easing.InOutSine }
+                            NumberAnimation { from: 1.0; to: 0.0; duration: 1200; easing.type: Easing.InOutSine }
+                        }
 
-                        RowLayout {
-                            anchors.centerIn: parent
-                            spacing: 8
+                        property real pumpPhase: 0.0
+                        NumberAnimation on pumpPhase {
+                            running: heroMa.containsMouse && window.isCharging
+                            loops: Animation.Infinite
+                            from: 0.0; to: 1.0; duration: 1200
+                            easing.type: Easing.InOutSine 
+                            onStopped: batCanvas.requestPaint()
+                        }
+                        
+                        property real dischargePhase: 1.0
+                        NumberAnimation on dischargePhase {
+                            running: heroMa.containsMouse && !window.isCharging
+                            loops: Animation.Infinite
+                            from: 1.0; to: 0.0; duration: 1600
+                            easing.type: Easing.InOutSine
+                            onStopped: batCanvas.requestPaint()
+                        }
+                        
+                        onPumpPhaseChanged: { if(heroMa.containsMouse && window.isCharging) batCanvas.requestPaint() }
+                        onDischargePhaseChanged: { if(heroMa.containsMouse && !window.isCharging) batCanvas.requestPaint() }
+
+                        Canvas {
+                            id: batCanvas
+                            anchors.fill: parent
+                            rotation: 180 
                             
-                            Text {
-                                font.family: "Iosevka Nerd Font"
-                                font.pixelSize: 18
-                                color: logoutMa.containsMouse ? window.red : window.overlay0
-                                text: "󰍃"
-                                rotation: logoutMa.containsMouse ? 90 : 0
-                                Behavior on color { ColorAnimation { duration: 150 } }
-                                Behavior on rotation { NumberAnimation { duration: 300; easing.type: Easing.OutBack } }
+                            onPaint: {
+                                var ctx = getContext("2d");
+                                ctx.clearRect(0, 0, width, height);
+                                
+                                var centerX = width / 2;
+                                var centerY = height / 2;
+                                var radius = (width / 2) - 18; 
+                                var baseColorStr = window.batColor.toString();
+                                
+                                ctx.lineCap = "round";
+                                
+                                // Base unfilled track
+                                ctx.lineWidth = 8;
+                                ctx.beginPath();
+                                ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+                                ctx.strokeStyle = "#0dffffff";
+                                ctx.stroke();
+                                
+                                var endAngle = (window.animCapacity / 100) * 2 * Math.PI;
+
+                                ctx.globalAlpha = 1.0;
+                                ctx.lineWidth = 14;
+
+                                ctx.beginPath();
+                                ctx.arc(centerX, centerY, radius, 0, endAngle);
+                                ctx.strokeStyle = baseColorStr;
+                                ctx.stroke();
+
+                                if (heroMa.containsMouse && endAngle > 0.1) {
+                                    if (window.isCharging) {
+                                        var surgeCenter = parent.pumpPhase * endAngle;
+                                        for (var i = 0; i < 4; i++) {
+                                            var spread = 0.3 + (i * 0.2); 
+                                            var startA = Math.max(0, surgeCenter - spread);
+                                            var endA = Math.min(endAngle, surgeCenter + spread);
+                                            
+                                            if (startA < endA) {
+                                                ctx.beginPath();
+                                                ctx.arc(centerX, centerY, radius, startA, endA);
+                                                ctx.lineWidth = 14 + (4 - i) * 2; 
+                                                ctx.strokeStyle = baseColorStr;
+                                                ctx.globalAlpha = 0.2 * Math.sin(parent.pumpPhase * Math.PI);
+                                                ctx.stroke();
+                                            }
+                                        }
+                                        
+                                        if (parent.pumpPhase > 0.7) {
+                                            var flarePhase = (parent.pumpPhase - 0.7) / 0.3;
+                                            ctx.beginPath();
+                                            var hitX = centerX + Math.cos(endAngle) * radius;
+                                            var hitY = centerY + Math.sin(endAngle) * radius;
+                                            
+                                            ctx.arc(hitX, hitY, 7 + (flarePhase * 12), 0, 2*Math.PI);
+                                            ctx.fillStyle = baseColorStr;
+                                            ctx.globalAlpha = (1.0 - flarePhase) * 0.5; 
+                                            ctx.fill();
+                                        }
+                                    } else {
+                                        var drainCenter = parent.dischargePhase * endAngle;
+                                        for (var d = 0; d < 3; d++) {
+                                            var dSpread = 0.25 + (d * 0.2);
+                                            var dStart = Math.max(0, drainCenter - dSpread);
+                                            var dEnd = Math.min(endAngle, drainCenter + dSpread);
+                                            
+                                            if (dStart < dEnd) {
+                                                ctx.beginPath();
+                                                ctx.arc(centerX, centerY, radius, dStart, dEnd);
+                                                ctx.lineWidth = 14 + (2 - d) * 1.5;
+                                                ctx.strokeStyle = Qt.lighter(window.batColor, 1.2).toString();
+                                                ctx.globalAlpha = 0.3 * Math.sin(parent.dischargePhase * Math.PI);
+                                                ctx.stroke();
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                        }
+
+                        // Text Content
+                        ColumnLayout {
+                            anchors.centerIn: parent
+                            spacing: -2
                             
+                            RowLayout {
+                                Layout.alignment: Qt.AlignHCenter
+                                spacing: 8
+                                
+                                Text {
+                                    font.family: "Iosevka Nerd Font"
+                                    font.pixelSize: 32
+                                    color: window.batColor
+                                    text: window.isCharging ? "󰂄" : (window.batCapacity > 20 ? "󰁹" : "󰂃")
+                                    Behavior on color { ColorAnimation { duration: 400 } }
+                                }
+                                
+                                Text {
+                                    font.family: "JetBrains Mono"
+                                    font.weight: Font.Black
+                                    font.pixelSize: 54
+                                    color: window.text
+                                    text: Math.round(window.animCapacity) + "%" 
+                                }
+                            }
+
                             Text {
-                                visible: logoutBtn.width > 60
-                                opacity: logoutMa.containsMouse ? 1.0 : 0.0
+                                Layout.alignment: Qt.AlignHCenter
                                 font.family: "JetBrains Mono"
                                 font.weight: Font.Bold
                                 font.pixelSize: 13
-                                color: window.red
-                                text: "Logout"
-                                Behavior on opacity { NumberAnimation { duration: 200 } }
+                                
+                                color: window.isCharging 
+                                        ? Qt.tint(window.green, Qt.rgba(1, 1, 1, parent.textPulse * 0.4)) 
+                                        : window.subtext0
+                                        
+                                text: window.batStatus.toUpperCase()
+                                Behavior on color { ColorAnimation { duration: 300 } }
                             }
                         }
+                    }
+
+                    MouseArea {
+                        id: heroMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onEntered: batCanvas.requestPaint()
+                        onExited: batCanvas.requestPaint()
+                    }
+                }
+            }
+
+            // ==========================================
+            // BOTTOM DOCKS
+            // ==========================================
+            ColumnLayout {
+                anchors.bottom: parent.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: 25
+                spacing: 15
+
+                transform: Translate { y: 20 * (1.0 - introState) }
+                opacity: introState
+
+                // 1. SYSTEM ACTIONS DOCK (Vertical Hold-to-Execute)
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 75
+                    spacing: 12
+
+                    Repeater {
+                        model: ListModel {
+                            ListElement { lbl: "Lock"; cmd: "hyprlock"; icon: ""; c1: "#cba6f7"; c2: "#f5c2e7" }
+                            ListElement { lbl: "Sleep"; cmd: "hyprlock & systemctl suspend"; icon: "ᶻ 𝗓 𐰁"; c1: "#89b4fa"; c2: "#74c7ec" }
+                            ListElement { lbl: "Reboot"; cmd: "systemctl reboot"; icon: "󰑓"; c1: "#f9e2af"; c2: "#fab387" }
+                            ListElement { lbl: "Power"; cmd: "systemctl poweroff"; icon: ""; c1: "#f38ba8"; c2: "#eba0ac" }
+                        }
                         
-                        MouseArea {
-                            id: logoutMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: { Quickshell.execDetached(["sh", "-c", "loginctl terminate-user $USER"]); Qt.quit(); }
+                        delegate: Rectangle {
+                            id: actionCapsule
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            radius: 18
+                            color: actionMa.containsMouse ? "#1affffff" : "#0dffffff"
+                            border.color: actionMa.containsMouse ? c1 : "#1affffff"
+                            border.width: actionMa.containsMouse ? 2 : 1
+                            Behavior on color { ColorAnimation { duration: 200 } }
+                            Behavior on border.color { ColorAnimation { duration: 200 } }
+
+                            // Actionable but not bouncy
+                            scale: actionMa.pressed ? 0.96 : (actionMa.containsMouse ? 1.03 : 1.0)
+                            Behavior on scale { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
+
+                            property real fillLevel: 0.0
+                            property bool triggered: false
+                            property real flashOpacity: 0.0
+
+                            // Wave Fill (Vertical)
+                            Canvas {
+                                id: waveCanvas
+                                anchors.fill: parent
+                                
+                                property real wavePhase: 0.0
+                                NumberAnimation on wavePhase {
+                                    running: actionCapsule.fillLevel > 0.0 && actionCapsule.fillLevel < 1.0
+                                    loops: Animation.Infinite
+                                    from: 0; to: Math.PI * 2; duration: 800
+                                }
+
+                                onWavePhaseChanged: requestPaint()
+                                Connections { target: actionCapsule; function onFillLevelChanged() { waveCanvas.requestPaint() } }
+
+                                onPaint: {
+                                    var ctx = getContext("2d");
+                                    ctx.clearRect(0, 0, width, height);
+                                    if (actionCapsule.fillLevel <= 0.001) return;
+
+                                    var r = 18; 
+                                    var fillY = height * (1.0 - actionCapsule.fillLevel);
+
+                                    ctx.save();
+                                    ctx.beginPath();
+                                    ctx.moveTo(r, 0);
+                                    ctx.lineTo(width - r, 0);
+                                    ctx.arcTo(width, 0, width, r, r);
+                                    ctx.lineTo(width, height - r);
+                                    ctx.arcTo(width, height, width - r, height, r);
+                                    ctx.lineTo(r, height);
+                                    ctx.arcTo(0, height, 0, height - r, r);
+                                    ctx.lineTo(0, r);
+                                    ctx.arcTo(0, 0, r, 0, r);
+                                    ctx.closePath();
+                                    ctx.clip(); 
+
+                                    ctx.beginPath();
+                                    ctx.moveTo(0, fillY);
+                                    if (actionCapsule.fillLevel < 0.99) {
+                                        var waveAmp = 10 * Math.sin(actionCapsule.fillLevel * Math.PI); 
+                                        var cp1y = fillY + Math.sin(wavePhase) * waveAmp;
+                                        var cp2y = fillY + Math.cos(wavePhase + Math.PI) * waveAmp;
+                                        ctx.bezierCurveTo(width * 0.33, cp2y, width * 0.66, cp1y, width, fillY);
+                                        ctx.lineTo(width, height);
+                                        ctx.lineTo(0, height);
+                                    } else {
+                                        ctx.lineTo(width, 0);
+                                        ctx.lineTo(width, height);
+                                        ctx.lineTo(0, height);
+                                    }
+                                    ctx.closePath();
+
+                                    var grad = ctx.createLinearGradient(0, 0, 0, height);
+                                    grad.addColorStop(0, c1);
+                                    grad.addColorStop(1, c2);
+                                    ctx.fillStyle = grad;
+                                    ctx.fill();
+                                    ctx.restore();
+                                }
+                            }
+
+                            // Flash on trigger
+                            Rectangle {
+                                anchors.fill: parent; radius: 18; color: "#ffffff"
+                                opacity: actionCapsule.flashOpacity
+                                PropertyAnimation on opacity { id: cardFlashAnim; to: 0; duration: 500; easing.type: Easing.OutExpo }
+                            }
+
+                            // Base Text (Unfilled)
+                            ColumnLayout {
+                                id: baseTextCol
+                                anchors.centerIn: parent
+                                spacing: 4
+                                Text { 
+                                    Layout.alignment: Qt.AlignHCenter; font.family: "Iosevka Nerd Font"; font.pixelSize: 22
+                                    color: actionMa.containsMouse ? window.text : window.subtext0; text: icon
+                                    Behavior on color { ColorAnimation { duration: 150 } }
+                                }
+                                Text { 
+                                    Layout.alignment: Qt.AlignHCenter; font.family: "JetBrains Mono"; font.weight: Font.Bold; font.pixelSize: 11
+                                    color: actionMa.containsMouse ? window.text : window.subtext0; text: actionCapsule.fillLevel > 0.1 ? "Hold" : lbl
+                                    Behavior on color { ColorAnimation { duration: 150 } }
+                                }
+                            }
+
+                            // Overlay Text (Filled - Dark color for contrast)
+                            Item {
+                                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                                height: actionCapsule.height * actionCapsule.fillLevel
+                                clip: true
+                                
+                                ColumnLayout {
+                                    x: baseTextCol.x; y: baseTextCol.y - (actionCapsule.height - parent.height)
+                                    width: baseTextCol.width; height: baseTextCol.height
+                                    spacing: 4
+                                    Text { Layout.alignment: Qt.AlignHCenter; font.family: "Iosevka Nerd Font"; font.pixelSize: 22; color: window.crust; text: icon }
+                                    Text { Layout.alignment: Qt.AlignHCenter; font.family: "JetBrains Mono"; font.weight: Font.Bold; font.pixelSize: 11; color: window.crust; text: actionCapsule.fillLevel > 0.1 ? "Hold" : lbl }
+                                }
+                            }
+
+                            MouseArea {
+                                id: actionMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: actionCapsule.triggered ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                
+                                onPressed: { 
+                                    if (!actionCapsule.triggered && actionCapsule.fillLevel === 0.0) { drainAnim.stop(); fillAnim.start(); }
+                                }
+                                onReleased: {
+                                    if (!actionCapsule.triggered && actionCapsule.fillLevel < 1.0) { fillAnim.stop(); drainAnim.start(); }
+                                }
+                            }
+
+                            NumberAnimation {
+                                id: fillAnim; target: actionCapsule; property: "fillLevel"; to: 1.0
+                                duration: 600 * (1.0 - actionCapsule.fillLevel); easing.type: Easing.InSine
+                                onFinished: {
+                                    actionCapsule.triggered = true; actionCapsule.flashOpacity = 0.6; cardFlashAnim.start();
+                                    window.introState = 0.0; exitTimer.start();
+                                }
+                            }
+                            
+                            NumberAnimation {
+                                id: drainAnim; target: actionCapsule; property: "fillLevel"; to: 0.0
+                                duration: 1000 * actionCapsule.fillLevel; easing.type: Easing.OutQuad
+                            }
+
+                            Timer {
+                                id: exitTimer; interval: 500 
+                                onTriggered: { Quickshell.execDetached(["sh", "-c", cmd]); Qt.quit(); }
+                            }
                         }
                     }
                 }
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 25
-                    spacing: 25
+                // 2. POWER PROFILES DOCK (SLIDER REDESIGN)
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 54
+                    radius: 27
+                    color: "#0dffffff" 
+                    border.color: "#1affffff"
+                    border.width: 1
 
-                    // ==========================================
-                    // HERO: BATTERY RING
-                    // ==========================================
-                    Item {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 260
-                        
-                        transform: Translate { y: -30 * (1.0 - introState) }
-                        opacity: introState
+                    Rectangle {
+                        id: sliderPill
+                        width: (parent.width - 2) / 3 
+                        height: parent.height - 2
+                        y: 1
+                        radius: 26
+                        x: {
+                            if (window.powerProfile === "performance") return 1;
+                            if (window.powerProfile === "balanced") return width + 1;
+                            return (width * 2) + 1;
+                        }
+                        Behavior on x { NumberAnimation { duration: 400; easing.type: Easing.OutQuint } }
 
-                        Item {
-                            id: heroContainer
-                            anchors.centerIn: parent
-                            width: 240
-                            height: 240
-                            
-                            rotation: -45 + (45 * introState)
-
-                            MouseArea {
-                                id: heroMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onEntered: batCanvas.requestPaint()
-                                onExited: batCanvas.requestPaint()
-                            }
-
-                            property real textPulse: 0.0
-                            SequentialAnimation on textPulse {
-                                loops: Animation.Infinite
-                                running: true
-                                NumberAnimation { from: 0.0; to: 1.0; duration: 1200; easing.type: Easing.InOutSine }
-                                NumberAnimation { from: 1.0; to: 0.0; duration: 1200; easing.type: Easing.InOutSine }
-                            }
-
-                            property real pumpPhase: 0.0
-                            NumberAnimation on pumpPhase {
-                                running: heroMa.containsMouse && window.isCharging
-                                loops: Animation.Infinite
-                                from: 0.0; to: 1.0; duration: 1200
-                                easing.type: Easing.InOutSine 
-                                onStopped: batCanvas.requestPaint()
-                            }
-                            
-                            property real dischargePhase: 1.0
-                            NumberAnimation on dischargePhase {
-                                running: heroMa.containsMouse && !window.isCharging
-                                loops: Animation.Infinite
-                                from: 1.0; to: 0.0; duration: 1600
-                                easing.type: Easing.InOutSine
-                                onStopped: batCanvas.requestPaint()
-                            }
-                            
-                            onPumpPhaseChanged: { if(heroMa.containsMouse && window.isCharging) batCanvas.requestPaint() }
-                            onDischargePhaseChanged: { if(heroMa.containsMouse && !window.isCharging) batCanvas.requestPaint() }
-
-                            Canvas {
-                                id: batCanvas
-                                anchors.fill: parent
-                                rotation: 180 
-                                
-                                onPaint: {
-                                    var ctx = getContext("2d")
-                                    ctx.clearRect(0, 0, width, height)
-                                    
-                                    var centerX = width / 2
-                                    var centerY = height / 2
-                                    var radius = (width / 2) - 16
-                                    var baseColorStr = window.batColor.toString()
-                                    
-                                    ctx.lineCap = "round"
-                                    
-                                    ctx.lineWidth = 14
-                                    ctx.beginPath()
-                                    ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI)
-                                    ctx.strokeStyle = "#15ffffff"
-                                    ctx.stroke()
-                                    
-                                    var endAngle = (window.animCapacity / 100) * 2 * Math.PI
-
-                                    ctx.lineWidth = 26
-                                    ctx.beginPath()
-                                    ctx.arc(centerX, centerY, radius, 0, endAngle)
-                                    ctx.strokeStyle = baseColorStr
-                                    ctx.globalAlpha = 0.20
-                                    ctx.stroke()
-
-                                    ctx.globalAlpha = 1.0
-                                    ctx.lineWidth = 14
-                                    ctx.beginPath()
-                                    ctx.arc(centerX, centerY, radius, 0, endAngle)
-                                    ctx.strokeStyle = baseColorStr
-                                    ctx.stroke()
-
-                                    if (heroMa.containsMouse && endAngle > 0.1) {
-                                        if (window.isCharging) {
-                                            var surgeCenter = heroContainer.pumpPhase * endAngle;
-                                            for (var i = 0; i < 4; i++) {
-                                                var spread = 0.3 + (i * 0.2); 
-                                                var startA = Math.max(0, surgeCenter - spread);
-                                                var endA = Math.min(endAngle, surgeCenter + spread);
-                                                
-                                                if (startA < endA) {
-                                                    ctx.beginPath();
-                                                    ctx.arc(centerX, centerY, radius, startA, endA);
-                                                    ctx.lineWidth = 14 + (4 - i) * 2; 
-                                                    ctx.strokeStyle = baseColorStr;
-                                                    ctx.globalAlpha = 0.2 * Math.sin(heroContainer.pumpPhase * Math.PI);
-                                                    ctx.stroke();
-                                                }
-                                            }
-                                            
-                                            if (heroContainer.pumpPhase > 0.7) {
-                                                var flarePhase = (heroContainer.pumpPhase - 0.7) / 0.3;
-                                                ctx.beginPath();
-                                                var hitX = centerX + Math.cos(endAngle) * radius;
-                                                var hitY = centerY + Math.sin(endAngle) * radius;
-                                                
-                                                ctx.arc(hitX, hitY, 7 + (flarePhase * 12), 0, 2*Math.PI);
-                                                ctx.fillStyle = baseColorStr;
-                                                ctx.globalAlpha = (1.0 - flarePhase) * 0.5; 
-                                                ctx.fill();
-                                            }
-                                        } else {
-                                            var drainCenter = heroContainer.dischargePhase * endAngle;
-                                            for (var d = 0; d < 3; d++) {
-                                                var dSpread = 0.25 + (d * 0.2);
-                                                var dStart = Math.max(0, drainCenter - dSpread);
-                                                var dEnd = Math.min(endAngle, drainCenter + dSpread);
-                                                
-                                                if (dStart < dEnd) {
-                                                    ctx.beginPath();
-                                                    ctx.arc(centerX, centerY, radius, dStart, dEnd);
-                                                    ctx.lineWidth = 14 + (2 - d) * 1.5;
-                                                    ctx.strokeStyle = Qt.lighter(window.batColor, 1.2).toString();
-                                                    ctx.globalAlpha = 0.3 * Math.sin(heroContainer.dischargePhase * Math.PI);
-                                                    ctx.stroke();
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            ColumnLayout {
-                                anchors.centerIn: parent
-                                spacing: 0
-                                
-                                Text {
-                                    Layout.alignment: Qt.AlignHCenter
-                                    font.family: "Iosevka Nerd Font"
-                                    font.pixelSize: 38
-                                    color: heroMa.containsMouse ? Qt.lighter(window.batColor, 1.2) : window.batColor
-                                    text: heroMa.containsMouse ? "󱐋" : (window.isCharging ? "󰂄" : (window.batCapacity > 20 ? "󰁹" : "󰂃"))
-                                    
-                                    scale: heroMa.containsMouse ? 1.15 : 1.0
-                                    Behavior on scale { NumberAnimation { duration: 300; easing.type: Easing.OutBack } }
-                                    Behavior on color { ColorAnimation { duration: 400 } }
-                                }
-                                
-                                Text {
-                                    Layout.alignment: Qt.AlignHCenter
-                                    font.family: "JetBrains Mono"
-                                    font.weight: Font.Black
-                                    font.pixelSize: 58
-                                    font.letterSpacing: -3
-                                    color: heroMa.containsMouse ? window.batColor : window.text
-                                    text: Math.round(window.animCapacity) + "%" 
-                                    Behavior on color { ColorAnimation { duration: 400 } }
-                                }
-
-                                Text {
-                                    Layout.alignment: Qt.AlignHCenter
-                                    Layout.topMargin: 4
-                                    font.family: "JetBrains Mono"
-                                    font.weight: Font.Bold
-                                    font.pixelSize: 11
-                                    
-                                    color: window.isCharging 
-                                           ? Qt.tint(window.green, Qt.rgba(1, 1, 1, heroContainer.textPulse * 0.4)) 
-                                           : Qt.tint(window.overlay0, Qt.rgba(1, 1, 1, heroContainer.textPulse * 0.15))
-                                           
-                                    text: window.isCharging ? "CHARGING" : "DISCHARGING"
-                                    Behavior on color { ColorAnimation { duration: 300 } }
-                                }
-                            }
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: window.profileStart; Behavior on color { ColorAnimation{duration:400} } }
+                            GradientStop { position: 1.0; color: window.profileEnd; Behavior on color { ColorAnimation{duration:400} } }
                         }
                     }
 
-                    // ==========================================
-                    // POWER PROFILE SWITCHER
-                    // ==========================================
-                    Item {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 55
-                        
-                        transform: Translate { y: 20 * (1.0 - introState) }
-                        opacity: introState
+                    RowLayout {
+                        anchors.fill: parent
+                        spacing: 0
 
-                        Rectangle {
-                            id: segmentedBg
-                            anchors.centerIn: parent
-                            width: 260
-                            height: 55
-                            radius: height / 2
-                            color: "#0dffffff" 
-                            border.color: "#1affffff"
-                            border.width: 1
-
-                            Rectangle {
-                                id: sliderPill
-                                width: segmentedBg.width / 3
-                                height: segmentedBg.height
-                                radius: height / 2
-                                
-                                x: {
-                                    if (window.powerProfile === "performance") return 0;
-                                    if (window.powerProfile === "balanced") return width;
-                                    return width * 2;
-                                }
-                                Behavior on x { 
-                                    NumberAnimation { duration: 400; easing.type: Easing.OutExpo } 
-                                }
-
-                                gradient: Gradient {
-                                    orientation: Gradient.Horizontal
-                                    GradientStop { position: 0.0; color: window.profileStart; Behavior on color { ColorAnimation{duration:400} } }
-                                    GradientStop { position: 1.0; color: window.profileEnd; Behavior on color { ColorAnimation{duration:400} } }
-                                }
-                                opacity: 0.95
-                            }
-
-                            RowLayout {
-                                anchors.fill: parent
-                                spacing: 0
-                                
-                                Repeater {
-                                    model: ListModel {
-                                        ListElement { name: "performance"; icon: "󰓅" } 
-                                        ListElement { name: "balanced"; icon: "󰗑" }   
-                                        ListElement { name: "power-saver"; icon: "󰌪" } 
-                                    }
-                                    delegate: Item {
-                                        Layout.fillWidth: true
-                                        Layout.fillHeight: true
-                                        
-                                        Text {
-                                            anchors.centerIn: parent
-                                            font.family: "Iosevka Nerd Font"
-                                            font.pixelSize: 26
-                                            color: (window.powerProfile === name) ? window.crust : (profileMa.containsMouse ? window.text : window.subtext0)
-                                            text: icon
-                                            Behavior on color { ColorAnimation { duration: 250 } }
-                                            
-                                            scale: (window.powerProfile === name) ? 1.2 : (profileMa.containsMouse ? 1.1 : 1.0)
-                                            Behavior on scale { NumberAnimation { duration: 300; easing.type: Easing.OutBack } }
-                                        }
-
-                                        MouseArea {
-                                            id: profileMa
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                Quickshell.execDetached(["powerprofilesctl", "set", name])
-                                                sysPoller.running = true 
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Item { Layout.fillHeight: true } 
-
-                    // ==========================================
-                    // HOLD-TO-EXECUTE ACTIONS
-                    // ==========================================
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2
-                        rowSpacing: 12
-                        columnSpacing: 12
-                        
-                        transform: Translate { y: 40 * (1.0 - introState) }
-                        opacity: introState
-                        
                         Repeater {
                             model: ListModel {
-                                ListElement { lbl: "Lock"; cmd: "hyprlock"; icon: ""; c1: "#cba6f7"; c2: "#f5c2e7" }
-                                ListElement { lbl: "Sleep"; cmd: "hyprlock & systemctl suspend"; icon: "ᶻ 𝗓 𐰁"; c1: "#89b4fa"; c2: "#74c7ec" }
-                                ListElement { lbl: "Reboot"; cmd: "systemctl reboot"; icon: "󰑓"; c1: "#f9e2af"; c2: "#fab387" }
-                                ListElement { lbl: "Shutdown"; cmd: "systemctl poweroff"; icon: ""; c1: "#f38ba8"; c2: "#eba0ac" }
+                                ListElement { name: "performance"; icon: "󰓅"; label: "Perform" } 
+                                ListElement { name: "balanced"; icon: "󰗑"; label: "Balance" }   
+                                ListElement { name: "power-saver"; icon: "󰌪"; label: "Saver" } 
                             }
-                            
-                            Item {
-                                id: actionCapsule
+                            delegate: Item {
                                 Layout.fillWidth: true
-                                height: 55
+                                Layout.fillHeight: true
 
-                                scale: actionMa.pressed ? 0.94 : (actionMa.containsMouse ? 1.03 : 1.0)
-                                Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
-
-                                property real fillLevel: 0.0
-                                property bool triggered: false
-
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: 18
-                                    color: "#0dffffff"
-                                }
-
-                                Canvas {
-                                    id: waveCanvas
-                                    anchors.fill: parent
-                                    
-                                    property real wavePhase: 0.0
-                                    
-                                    NumberAnimation on wavePhase {
-                                        running: actionCapsule.fillLevel > 0.0 && actionCapsule.fillLevel < 1.0
-                                        loops: Animation.Infinite
-                                        from: 0; to: Math.PI * 2
-                                        duration: 800
-                                    }
-
-                                    onWavePhaseChanged: requestPaint()
-                                    
-                                    Connections {
-                                        target: actionCapsule
-                                        function onFillLevelChanged() { waveCanvas.requestPaint() }
-                                    }
-
-                                    onPaint: {
-                                        var ctx = getContext("2d");
-                                        ctx.clearRect(0, 0, width, height);
-
-                                        if (actionCapsule.fillLevel <= 0.001) return;
-
-                                        var currentW = width * actionCapsule.fillLevel;
-                                        var r = 18; 
-
-                                        ctx.save();
-                                        
-                                        ctx.beginPath();
-                                        ctx.moveTo(0, 0);
-                                        
-                                        if (actionCapsule.fillLevel < 0.99) {
-                                            var waveAmp = 12 * Math.sin(actionCapsule.fillLevel * Math.PI); 
-                                            if (currentW - waveAmp < 0) waveAmp = currentW;
-                                            
-                                            var cp1x = currentW + Math.sin(wavePhase) * waveAmp;
-                                            var cp2x = currentW + Math.cos(wavePhase + Math.PI) * waveAmp;
-
-                                            ctx.lineTo(currentW, 0);
-                                            ctx.bezierCurveTo(cp2x, height * 0.33, cp1x, height * 0.66, currentW, height);
-                                            ctx.lineTo(0, height);
-                                        } else {
-                                            ctx.lineTo(width, 0);
-                                            ctx.lineTo(width, height);
-                                            ctx.lineTo(0, height);
-                                        }
-                                        ctx.closePath();
-                                        ctx.clip(); 
-
-                                        ctx.beginPath();
-                                        ctx.moveTo(r, 0);
-                                        ctx.lineTo(width - r, 0);
-                                        ctx.arcTo(width, 0, width, r, r);
-                                        ctx.lineTo(width, height - r);
-                                        ctx.arcTo(width, height, width - r, height, r);
-                                        ctx.lineTo(r, height);
-                                        ctx.arcTo(0, height, 0, height - r, r);
-                                        ctx.lineTo(0, r);
-                                        ctx.arcTo(0, 0, r, 0, r);
-                                        ctx.closePath();
-
-                                        var grad = ctx.createLinearGradient(0, 0, currentW, 0);
-                                        grad.addColorStop(0, c1);
-                                        grad.addColorStop(1, c2);
-                                        ctx.fillStyle = grad;
-                                        ctx.fill();
-
-                                        ctx.restore();
-                                    }
-                                }
-                                
                                 RowLayout {
-                                    id: baseTextRow
                                     anchors.centerIn: parent
-                                    spacing: 10
-                                    
+                                    spacing: 8
                                     Text {
-                                        font.family: "Iosevka Nerd Font"
-                                        font.pixelSize: 20
-                                        color: actionMa.containsMouse ? window.text : window.subtext0
+                                        font.family: "Iosevka Nerd Font"; font.pixelSize: 18
+                                        color: window.powerProfile === name ? window.crust : (profileMa.containsMouse ? window.text : window.subtext0)
                                         text: icon
-                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                        Behavior on color { ColorAnimation { duration: 200 } }
                                     }
-                                    
                                     Text {
-                                        font.family: "JetBrains Mono"
-                                        font.weight: Font.Bold
-                                        font.pixelSize: 13
-                                        color: actionMa.containsMouse ? window.text : window.subtext0
-                                        text: actionCapsule.fillLevel > 0.1 ? "Hold..." : lbl
-                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                        font.family: "JetBrains Mono"; font.weight: Font.Black; font.pixelSize: 13
+                                        color: window.powerProfile === name ? window.crust : (profileMa.containsMouse ? window.text : window.subtext0)
+                                        text: label
+                                        Behavior on color { ColorAnimation { duration: 200 } }
                                     }
-                                }
-
-                                Item {
-                                    anchors.left: parent.left
-                                    anchors.top: parent.top
-                                    anchors.bottom: parent.bottom
-                                    width: actionCapsule.width * actionCapsule.fillLevel
-                                    clip: true
-                                    
-                                    RowLayout {
-                                        x: baseTextRow.x
-                                        y: baseTextRow.y
-                                        width: baseTextRow.width
-                                        height: baseTextRow.height
-                                        spacing: 10
-                                        
-                                        Text {
-                                            font.family: "Iosevka Nerd Font"
-                                            font.pixelSize: 20
-                                            color: window.crust
-                                            text: icon
-                                        }
-                                        
-                                        Text {
-                                            font.family: "JetBrains Mono"
-                                            font.weight: Font.Bold
-                                            font.pixelSize: 13
-                                            color: window.crust
-                                            text: actionCapsule.fillLevel > 0.1 ? "Hold..." : lbl
-                                        }
-                                    }
-                                }
-
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: 18
-                                    color: "transparent"
-                                    border.color: actionMa.containsMouse ? c1 : "#1affffff"
-                                    Behavior on border.color { ColorAnimation { duration: 200 } }
                                 }
 
                                 MouseArea {
-                                    id: actionMa
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    
-                                    onPressed: { 
-                                        if (!actionCapsule.triggered) {
-                                            drainAnim.stop()
-                                            fillAnim.start()
-                                        }
-                                    }
-                                    onReleased: {
-                                        if (!actionCapsule.triggered) {
-                                            fillAnim.stop()
-                                            drainAnim.start()
-                                        }
-                                    }
-                                }
-
-                                NumberAnimation {
-                                    id: fillAnim
-                                    target: actionCapsule
-                                    property: "fillLevel"
-                                    to: 1.0
-                                    duration: 600 * (1.0 - actionCapsule.fillLevel) 
-                                    easing.type: Easing.InSine
-                                    onFinished: {
-                                        actionCapsule.triggered = true;
-                                        window.introState = 0.0;
-                                        exitTimer.start();
-                                    }
-                                }
-                                
-                                NumberAnimation {
-                                    id: drainAnim
-                                    target: actionCapsule
-                                    property: "fillLevel"
-                                    to: 0.0
-                                    duration: 1500 * actionCapsule.fillLevel 
-                                    easing.type: Easing.OutQuad
-                                }
-
-                                Timer {
-                                    id: exitTimer
-                                    interval: 500 
-                                    onTriggered: {
-                                        Quickshell.execDetached(["sh", "-c", cmd]);
-                                        Qt.quit();
-                                    }
+                                    id: profileMa
+                                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                    onClicked: { Quickshell.execDetached(["powerprofilesctl", "set", name]); sysPoller.running = true; }
                                 }
                             }
                         }

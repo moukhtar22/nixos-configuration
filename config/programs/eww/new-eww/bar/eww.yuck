@@ -458,7 +458,7 @@
     )
 )
 (defwidget weather [] 
-    (eventbox :onclick "bash ./scripts/open_eww.sh calendar_win"
+    (eventbox :onclick "bash ~/.config/hypr/scripts/calendar/launch_calendar.sh"
         (box :class "dockbox"
             (box :class "clockbox" :orientation "v" :spacing 0 :valign "center" 
                  :halign "start" :space-evenly "false" :vexpand "false" :hexpand "false"

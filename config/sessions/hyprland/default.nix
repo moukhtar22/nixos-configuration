@@ -26,6 +26,7 @@
     hyprshot
     fd
     qt6.qtmultimedia
+    qt6.qt5compat
     ripgrep
     gtk3
     cava

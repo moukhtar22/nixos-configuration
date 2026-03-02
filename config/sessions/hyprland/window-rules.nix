@@ -42,14 +42,15 @@
       "float, title:^(wallpaper-picker)$"
       "center, title:^(wallpaper-picker)$"
       "size 1920 500, title:^(wallpaper-picker)$"
+      # "move 0 0, title:^(wallpaper-picker)$"
 
 
       # ───────── Battery Popup ─────────
       "float, title:^(battery-popup)$"
       "pin, title:^(battery-popup)$"
 
-      "size 420 580, title:^(battery-popup)$"
-      "move 100%-440 70, title:^(battery-popup)$"
+      "size 480 680, title:^(battery-popup)$"
+      "move 100%-500 70, title:^(battery-popup)$"
 
 
       # ───────── App Launcher ─────────
@@ -78,6 +79,14 @@
 
       "dimaround, title:^(music_win)$"
       "animation slide top, title:^(music_win)$"
-    ];
+
+      
+      # ───────── Calendar Window ─────────
+      "float, title:^(calendar_win)$"
+      "pin, title:^(calendar_win)$"
+      
+      "size 1300 750, title:^(calendar_win)$"
+      "move 310 70, title:^(calendar_win)$"
+		];
   };
 }

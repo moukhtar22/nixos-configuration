@@ -40,9 +40,7 @@ FloatingWindow {
             }
             let cmd = "pw-play '" + cleanPath + "' 2>/dev/null || paplay '" + cleanPath + "' 2>/dev/null";
             Quickshell.execDetached(["sh", "-c", cmd]);
-        } catch(e) {
-            console.log("Failed to play sound: " + e);
-        }
+        } catch(e) {}
     }
 
     // -------------------------------------------------------------------------
@@ -82,78 +80,81 @@ FloatingWindow {
     Timer { id: wifiPendingReset; interval: 8000; onTriggered: { window.wifiPowerPending = false; window.expectedWifiPower = ""; } }
     Timer { id: btPendingReset; interval: 8000; onTriggered: { window.btPowerPending = false; window.expectedBtPower = ""; } }
 
+    property bool showInfoView: false
+
+    onCurrentConnChanged: {
+        showInfoView = currentConn;
+        if (currentConn) updateInfoNodes();
+    }
+
+    onActiveModeChanged: {
+        window.busyTask = "";
+        window.showInfoView = window.currentConn;
+        if (window.showInfoView) window.updateInfoNodes();
+    }
+
     // -------------------------------------------------------------------------
     // SMART DIFFING LIST MODELS
     // -------------------------------------------------------------------------
     ListModel { id: wifiListModel }
     ListModel { id: btListModel }
+    ListModel { id: infoListModel }
 
-    function syncModel(listModel, dataArray, isWifi) {
+    function syncModel(listModel, dataArray) {
         for (let i = listModel.count - 1; i >= 0; i--) {
-            let id = isWifi ? listModel.get(i).ssid : listModel.get(i).mac;
+            let id = listModel.get(i).id;
             let found = false;
             for (let j = 0; j < dataArray.length; j++) {
-                let dId = isWifi ? dataArray[j].ssid : dataArray[j].mac;
-                if (id === dId) { found = true; break; }
+                if (id === dataArray[j].id) { found = true; break; }
             }
-            if (!found) {
-                listModel.remove(i);
-            }
+            if (!found) { listModel.remove(i); }
         }
         
         for (let i = 0; i < dataArray.length && i < 24; i++) {
             let d = dataArray[i];
-            let dId = isWifi ? d.ssid : d.mac;
-            
             let foundIdx = -1;
             for (let j = i; j < listModel.count; j++) {
-                let mId = isWifi ? listModel.get(j).ssid : listModel.get(j).mac;
-                if (mId === dId) { foundIdx = j; break; }
+                if (listModel.get(j).id === d.id) { foundIdx = j; break; }
             }
             
             let obj = {
+                id: d.id || "",
                 ssid: d.ssid || "",
                 mac: d.mac || "",
-                name: d.name || "",
+                name: d.name || d.ssid || "", 
                 icon: d.icon || "",
                 security: d.security || "",
-                action: d.action || ""
+                action: d.action || "",
+                isInfoNode: d.isInfoNode || false,
+                isActionable: d.isActionable !== undefined ? d.isActionable : false,
+                cmdStr: d.cmdStr || ""
             };
 
             if (foundIdx === -1) {
                 listModel.insert(i, obj);
             } else {
-                if (foundIdx !== i) {
-                    listModel.move(foundIdx, i, 1);
+                if (foundIdx !== i) { listModel.move(foundIdx, i, 1); }
+                // SMART DIFFING: Only set the property if it actually changed to prevent UI redraw lag!
+                for (let key in obj) { 
+                    if (listModel.get(i)[key] !== obj[key]) {
+                        listModel.setProperty(i, key, obj[key]); 
+                    }
                 }
-                listModel.setProperty(i, "icon", obj.icon);
-                listModel.setProperty(i, "name", obj.name);
-                listModel.setProperty(i, "security", obj.security);
-                listModel.setProperty(i, "action", obj.action);
             }
         }
     }
 
-    // -------------------------------------------------------------------------
-    // ANTI-THRASHING LIST LOCK
-    // -------------------------------------------------------------------------
     property int hoveredCardCount: 0
     readonly property bool isListLocked: hoveredCardCount > 0
     property var nextWifiList: null
     property var nextBtList: null
+    property var nextInfoList: null
 
     onIsListLockedChanged: {
         if (!isListLocked) {
-            if (nextWifiList !== null) {
-                window.syncModel(wifiListModel, nextWifiList, true);
-                window.wifiList = nextWifiList;
-                nextWifiList = null;
-            }
-            if (nextBtList !== null) {
-                window.syncModel(btListModel, nextBtList, false);
-                window.btList = nextBtList;
-                nextBtList = null;
-            }
+            if (nextWifiList !== null) { window.syncModel(wifiListModel, nextWifiList); window.wifiList = nextWifiList; nextWifiList = null; }
+            if (nextBtList !== null) { window.syncModel(btListModel, nextBtList); window.btList = nextBtList; nextBtList = null; }
+            if (nextInfoList !== null) { window.syncModel(infoListModel, nextInfoList); nextInfoList = null; }
         }
     }
 
@@ -172,18 +173,15 @@ FloatingWindow {
         let found = false;
         if (cache.lastWifiSsid !== "") {
             for (let i = 0; i < wifiList.length; i++) {
-                if (wifiList[i].ssid === cache.lastWifiSsid) {
-                    found = true; break;
-                }
+                if (wifiList[i].id === cache.lastWifiSsid) { found = true; break; }
             }
         }
         return found ? cache.lastWifiSsid : strongestWifiSsid;
     }
 
     onWifiConnectedChanged: {
-        if (window.wifiConnected && window.wifiConnected.ssid) {
-            cache.lastWifiSsid = window.wifiConnected.ssid;
-        }
+        if (window.wifiConnected && window.wifiConnected.ssid) { cache.lastWifiSsid = window.wifiConnected.ssid; }
+        if (window.currentConn && window.activeMode === "wifi") updateInfoNodes();
     }
 
     property bool btPowerPending: false
@@ -192,11 +190,37 @@ FloatingWindow {
     property var btConnected: null
     property var btList: []
     readonly property bool isBtConn: !!window.btConnected && window.btConnected.mac !== undefined && window.btConnected.mac !== ""
+    
+    onBtConnectedChanged: { if (window.currentConn && window.activeMode === "bt") updateInfoNodes() }
 
     readonly property bool currentPower: activeMode === "wifi" ? window.wifiPower === "on" : window.btPower === "on"
     readonly property bool currentPowerPending: activeMode === "wifi" ? window.wifiPowerPending : window.btPowerPending
     readonly property bool currentConn: activeMode === "wifi" ? window.isWifiConn : window.isBtConn
     readonly property var currentObj: activeMode === "wifi" ? window.wifiConnected : window.btConnected
+
+    // Generates the flat Single-Orbit Info Constellation
+    function updateInfoNodes() {
+        let nodes = [];
+        if (window.currentConn && window.currentObj) {
+            if (window.activeMode === "wifi") {
+                let sigValue = window.currentObj.signal !== undefined ? window.currentObj.signal + "%" : "Calculating...";
+                nodes.push({ id: "sig", name: sigValue, icon: window.currentObj.icon || "󰤨", action: "Signal Strength", isInfoNode: true, isActionable: false });
+                nodes.push({ id: "sec", name: window.currentObj.security || "Open", icon: "󰦝", action: "Security", isInfoNode: true, isActionable: false });
+                if (window.currentObj.ip) nodes.push({ id: "ip", name: window.currentObj.ip, icon: "󰩟", action: "IP Address", isInfoNode: true, isActionable: false });
+                if (window.currentObj.freq) nodes.push({ id: "freq", name: window.currentObj.freq, icon: "󰖧", action: "Band", isInfoNode: true, isActionable: false });
+            } else {
+                nodes.push({ id: "bat", name: (window.currentObj.battery || "0") + "%", icon: "󰥉", action: "Battery", isInfoNode: true, isActionable: false });
+                if (window.currentObj.profile) {
+                    nodes.push({ id: "prof", name: window.currentObj.profile, icon: (window.currentObj.profile === "Hi-Fi (A2DP)" ? "󰓃" : "󰋎"), action: "Audio Profile", isInfoNode: true, isActionable: false });
+                }
+                nodes.push({ id: "mac", name: window.currentObj.mac || "Unknown", icon: "󰒋", action: "MAC Address", isInfoNode: true, isActionable: false });
+            }
+            nodes.push({ id: "action_scan", name: "Scan Devices", icon: "󰍉", action: "Switch View", isInfoNode: true, isActionable: true, cmdStr: "TOGGLE_VIEW" });
+        }
+        
+        if (window.isListLocked) window.nextInfoList = nodes;
+        else { window.syncModel(infoListModel, nodes); window.nextInfoList = null; }
+    }
 
     Process {
         id: wifiPoller
@@ -210,56 +234,42 @@ FloatingWindow {
                     window.wifiPower = data.power || "off"
                     
                     if (window.expectedWifiPower !== "") {
-                        if (window.wifiPower === window.expectedWifiPower) {
-                            window.wifiPowerPending = false;
-                            window.expectedWifiPower = "";
-                            wifiPendingReset.stop();
-                        }
-                    } else {
-                        window.wifiPowerPending = false;
-                    }
+                        if (window.wifiPower === window.expectedWifiPower) { window.wifiPowerPending = false; window.expectedWifiPower = ""; wifiPendingReset.stop(); }
+                    } else { window.wifiPowerPending = false; }
 
-                    window.wifiConnected = data.connected
+                    // Only update the reference if the JSON actively changed to prevent UI reloading!
+                    let newConnected = data.connected;
+                    if (JSON.stringify(window.wifiConnected) !== JSON.stringify(newConnected)) {
+                        window.wifiConnected = newConnected;
+                    }
                     
                     let newNetworks = data.networks ? data.networks : [];
-                    
                     if (newNetworks.length > 0) {
-                        let maxSig = -1;
-                        let bestSsid = newNetworks[0].ssid;
+                        let maxSig = -1; let bestSsid = newNetworks[0].id;
                         for (let i = 0; i < newNetworks.length; i++) {
-                            let sig = parseInt(newNetworks[i].signal || newNetworks[i].bars || 0);
-                            if (sig > maxSig) { maxSig = sig; bestSsid = newNetworks[i].ssid; }
+                            let sig = parseInt(newNetworks[i].signal || 0);
+                            if (sig > maxSig) { maxSig = sig; bestSsid = newNetworks[i].id; }
                         }
                         window.strongestWifiSsid = bestSsid;
-                    } else {
-                        window.strongestWifiSsid = "";
-                    }
+                    } else { window.strongestWifiSsid = ""; }
 
-                    newNetworks.sort((a, b) => {
-                        let nA = a.ssid ? a.ssid.toString().toLowerCase() : "";
-                        let nB = b.ssid ? b.ssid.toString().toLowerCase() : "";
-                        return nA.localeCompare(nB);
-                    });
+                    newNetworks.sort((a, b) => a.id.localeCompare(b.id));
+
+                    if (window.isWifiConn && window.activeMode === "wifi") {
+                        newNetworks.push({ id: "action_settings", ssid: "Current Device", mac: "", name: "Current Device", icon: "󰒓", security: "", action: "View Info", isInfoNode: false, isActionable: true, cmdStr: "TOGGLE_VIEW" });
+                    }
 
                     if (JSON.stringify(window.wifiList) !== JSON.stringify(newNetworks)) {
-                        if (window.isListLocked) {
-                            window.nextWifiList = newNetworks;
-                        } else {
-                            window.syncModel(wifiListModel, newNetworks, true);
-                            window.wifiList = newNetworks; 
-                            window.nextWifiList = null;
-                        }
+                        if (window.isListLocked) window.nextWifiList = newNetworks;
+                        else { window.syncModel(wifiListModel, newNetworks); window.wifiList = newNetworks; window.nextWifiList = null; }
                     }
 
-                    // Checks if connection successfully resolved and plays audio
                     if (window.activeMode === "wifi") {
-                        if (window.busyTask === "DISCONNECTING" && !window.isWifiConn) { 
-                            window.busyTask = ""; busyTimeout.stop(); 
-                        } 
-                        else if (window.busyTask !== "" && window.isWifiConn && window.wifiConnected.ssid === window.busyTask) { 
-                            window.playSfx("connect.wav");
-                            window.busyTask = ""; busyTimeout.stop(); 
+                        if (window.busyTask === "DISCONNECTING" && !window.isWifiConn) { window.busyTask = ""; busyTimeout.stop(); } 
+                        else if (window.busyTask !== "" && window.isWifiConn && window.wifiConnected && window.wifiConnected.ssid === window.busyTask) { 
+                            window.playSfx("connect.wav"); window.busyTask = ""; busyTimeout.stop(); 
                         }
+                        if (window.currentConn) window.updateInfoNodes();
                     }
                 } catch(e) {}
             }
@@ -278,43 +288,33 @@ FloatingWindow {
                     window.btPower = data.power || "off"
                     
                     if (window.expectedBtPower !== "") {
-                        if (window.btPower === window.expectedBtPower) {
-                            window.btPowerPending = false;
-                            window.expectedBtPower = "";
-                            btPendingReset.stop();
-                        }
-                    } else {
-                        window.btPowerPending = false;
+                        if (window.btPower === window.expectedBtPower) { window.btPowerPending = false; window.expectedBtPower = ""; btPendingReset.stop(); }
+                    } else { window.btPowerPending = false; }
+
+                    // Only update the reference if the JSON actively changed to prevent UI reloading!
+                    let newBtConnected = data.connected;
+                    if (JSON.stringify(window.btConnected) !== JSON.stringify(newBtConnected)) {
+                        window.btConnected = newBtConnected;
                     }
 
-                    window.btConnected = data.connected
-                    
                     let newDevices = data.devices ? data.devices : [];
-                    newDevices.sort((a, b) => {
-                        let nA = (a.name || a.mac || "").toString().toLowerCase();
-                        let nB = (b.name || b.mac || "").toString().toLowerCase();
-                        return nA.localeCompare(nB);
-                    });
+                    newDevices.sort((a, b) => a.id.localeCompare(b.id));
+
+                    if (window.isBtConn && window.activeMode === "bt") {
+                        newDevices.push({ id: "action_settings", ssid: "", mac: "action_settings", name: "Current Device", icon: "󰒓", action: "View Info", isInfoNode: false, isActionable: true, cmdStr: "TOGGLE_VIEW" });
+                    }
 
                     if (JSON.stringify(window.btList) !== JSON.stringify(newDevices)) {
-                        if (window.isListLocked) {
-                            window.nextBtList = newDevices;
-                        } else {
-                            window.syncModel(btListModel, newDevices, false);
-                            window.btList = newDevices; 
-                            window.nextBtList = null;
-                        }
+                        if (window.isListLocked) window.nextBtList = newDevices;
+                        else { window.syncModel(btListModel, newDevices); window.btList = newDevices; window.nextBtList = null; }
                     }
 
-                    // Checks if connection successfully resolved and plays audio
                     if (window.activeMode === "bt") {
-                        if (window.busyTask === "DISCONNECTING" && !window.isBtConn) { 
-                            window.busyTask = ""; busyTimeout.stop(); 
-                        } 
-                        else if (window.busyTask !== "" && window.isBtConn && window.btConnected.mac === window.busyTask) { 
-                            window.playSfx("connect.wav");
-                            window.busyTask = ""; busyTimeout.stop(); 
+                        if (window.busyTask === "DISCONNECTING" && !window.isBtConn) { window.busyTask = ""; busyTimeout.stop(); } 
+                        else if (window.busyTask !== "" && window.isBtConn && window.btConnected && window.btConnected.mac === window.busyTask) { 
+                            window.playSfx("connect.wav"); window.busyTask = ""; busyTimeout.stop(); 
                         }
+                        if (window.currentConn) window.updateInfoNodes();
                     }
                 } catch(e) {}
             }
@@ -323,29 +323,19 @@ FloatingWindow {
 
     Timer {
         interval: window.busyTask !== "" ? 1000 : 3000
-        running: true
-        repeat: true
+        running: true; repeat: true
         onTriggered: { wifiPoller.running = true; btPoller.running = true; }
     }
 
-    // -------------------------------------------------------------------------
-    // CONTINUOUS ORBIT ANIMATION
-    // -------------------------------------------------------------------------
     property real globalOrbitAngle: 0
     NumberAnimation on globalOrbitAngle {
         from: 0; to: Math.PI * 2; duration: 90000; loops: Animation.Infinite; running: true
     }
 
-    // -------------------------------------------------------------------------
-    // INTRO ANIMATION
-    // -------------------------------------------------------------------------
     property real introState: 0.0
     Component.onCompleted: introState = 1.0
     Behavior on introState { NumberAnimation { duration: 800; easing.type: Easing.OutQuint } }
 
-    // -------------------------------------------------------------------------
-    // REUSABLE COMPONENTS
-    // -------------------------------------------------------------------------
     component LoadingDots : Row {
         spacing: 5
         property color dotCol: window.text
@@ -364,15 +354,11 @@ FloatingWindow {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // UI LAYOUT
-    // -------------------------------------------------------------------------
     Item {
         anchors.fill: parent
         scale: 0.8 + (0.2 * introState)
         opacity: introState
 
-        // Base Window
         Rectangle {
             anchors.fill: parent
             radius: 30
@@ -381,9 +367,6 @@ FloatingWindow {
             border.width: 1
             clip: true
 
-            // =========================================================
-            // 1. THE NEBULA BACKGROUND
-            // =========================================================
             Rectangle {
                 width: parent.width * 0.8; height: width; radius: width / 2
                 x: (parent.width / 2 - width / 2) + Math.cos(window.globalOrbitAngle * 2) * 150
@@ -404,10 +387,8 @@ FloatingWindow {
                 Behavior on opacity { NumberAnimation { duration: 1000 } }
             }
 
-            // =========================================================
-            // 2. THE RADAR RINGS
-            // =========================================================
             Item {
+                id: radarItem
                 anchors.fill: parent
                 anchors.bottomMargin: 80 
                 opacity: window.currentPower ? 1.0 : 0.0
@@ -421,22 +402,61 @@ FloatingWindow {
                         height: width
                         radius: width / 2
                         color: "transparent"
-                        border.color: window.activeColor
-                        border.width: 1
-                        opacity: window.currentConn ? 0.08 - (index * 0.02) : 0.03
-                        Behavior on border.color { ColorAnimation { duration: 600 } }
-                        Behavior on opacity { NumberAnimation { duration: 600 } }
+                        
+                        border.color: coreMa.pressed && centralCore.disconnectFill > 0.05 ? "#9A1020" : window.activeColor
+                        border.width: coreMa.pressed && centralCore.disconnectFill > 0.05 ? 2 : 1
+                        
+                        Behavior on border.color { ColorAnimation { duration: 150 } }
+                        Behavior on border.width { NumberAnimation { duration: 150 } }
+
+                        opacity: coreMa.pressed && centralCore.disconnectFill > 0.05 ? 0.2 : (window.currentConn ? 0.08 - (index * 0.02) : 0.03)
+                        Behavior on opacity { NumberAnimation { duration: 150 } }
                     }
                 }
             }
 
-            // =========================================================
-            // THE ORBITAL POND (Main Canvas)
-            // =========================================================
+            Canvas {
+                id: nodeLinesCanvas
+                anchors.fill: parent
+                anchors.bottomMargin: 80
+                z: 0 
+                opacity: (window.currentConn && window.showInfoView) ? 1.0 : 0.0
+                Behavior on opacity { NumberAnimation { duration: 500 } }
+                
+                Connections {
+                    target: window
+                    function onGlobalOrbitAngleChanged() { if (window.currentConn && window.showInfoView) nodeLinesCanvas.requestPaint() }
+                }
+                
+                onPaint: {
+                    var ctx = getContext("2d");
+                    ctx.clearRect(0, 0, width, height);
+                    if (!window.currentConn || !window.showInfoView) return;
+                    
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeStyle = window.activeColor;
+                    ctx.globalAlpha = 0.25;
+                    
+                    var centerX = width / 2;
+                    var centerY = height / 2;
+                    
+                    for (var i = 0; i < orbitRepeater.count; i++) {
+                        var item = orbitRepeater.itemAt(i);
+                        if (item && item.isLoaded) {
+                            ctx.beginPath();
+                            ctx.moveTo(centerX, centerY);
+                            ctx.lineTo(item.x + item.width / 2, item.y + item.height / 2);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
             Item {
                 id: orbitContainer
                 anchors.fill: parent
                 anchors.bottomMargin: 80 
+                z: 1
 
                 // --- THE CENTRAL CORE ---
                 Rectangle {
@@ -450,8 +470,6 @@ FloatingWindow {
                     property bool disconnectTriggered: false
                     property real flashOpacity: 0.0
                     property real bumpScale: 1.0
-                    
-                    // Danger state holds until the water has fully drained
                     property bool isDangerState: coreMa.containsMouse || disconnectFill > 0
                     
                     scale: bumpScale
@@ -464,7 +482,6 @@ FloatingWindow {
                         NumberAnimation { to: 1.0; duration: 400; easing.type: Easing.OutQuint }
                     }
 
-                    // Soft Peach/Maroon background provides perfect contrast for dark text
                     gradient: Gradient {
                         orientation: Gradient.Vertical
                         GradientStop {
@@ -497,7 +514,6 @@ FloatingWindow {
                     }
                     Behavior on border.color { ColorAnimation { duration: 300 } }
                     
-                    // Flash Layer
                     Rectangle {
                         anchors.fill: parent
                         radius: parent.radius
@@ -506,7 +522,6 @@ FloatingWindow {
                         PropertyAnimation on opacity { id: coreFlashAnim; to: 0; duration: 500; easing.type: Easing.OutExpo }
                     }
 
-                    // Fluid Water Fill Canvas (Realistic Bezier Curve with deep red colors)
                     Canvas {
                         id: coreWave
                         anchors.fill: parent
@@ -545,7 +560,6 @@ FloatingWindow {
                                 var cp1y = fillY + Math.sin(wavePhase) * waveAmp;
                                 var cp2y = fillY + Math.cos(wavePhase + Math.PI) * waveAmp;
                                 
-                                // Organic Bezier fluid wave
                                 ctx.bezierCurveTo(width * 0.33, cp2y, width * 0.66, cp1y, width, fillY);
                                 ctx.lineTo(width, height);
                                 ctx.lineTo(0, height);
@@ -556,9 +570,8 @@ FloatingWindow {
                             }
                             ctx.closePath();
                             
-                            // Pure, beautiful red to dark red transition
                             var grad = ctx.createLinearGradient(0, 0, 0, height);
-                            grad.addColorStop(0, window.red.toString());
+                            grad.addColorStop(0, "#E61919"); 
                             grad.addColorStop(1, Qt.darker(window.red, 1.4).toString());
                             ctx.fillStyle = grad;
                             ctx.fill();
@@ -571,11 +584,9 @@ FloatingWindow {
                         width: parent.width + 40
                         height: width
                         radius: width / 2
-                        
                         color: centralCore.isDangerState && window.currentConn ? window.red : window.activeColor
                         opacity: window.currentConn && window.busyTask !== "DISCONNECTING" ? (centralCore.isDangerState ? 0.3 : 0.15) : 0.0
                         z: -1
-                        
                         Behavior on color { ColorAnimation { duration: 200 } }
                         Behavior on opacity { NumberAnimation { duration: 300 } }
                         
@@ -641,7 +652,6 @@ FloatingWindow {
                             Text {
                                 Layout.alignment: Qt.AlignHCenter
                                 font.family: "JetBrains Mono"; font.weight: Font.Bold; font.pixelSize: 11
-                                // Peach/Maroon danger background makes crust text beautifully legible
                                 color: window.busyTask === "DISCONNECTING" ? window.overlay1 : (centralCore.disconnectFill > 0.1 ? window.crust : (coreMa.containsMouse ? window.crust : "#99000000"))
                                 text: window.busyTask === "DISCONNECTING" ? "Disconnecting..." : (centralCore.disconnectFill > 0.1 ? "Hold..." : "Connected")
                                 Behavior on color { ColorAnimation { duration: 200 } }
@@ -707,7 +717,9 @@ FloatingWindow {
                     }
                 }
 
+                // =========================================================
                 // 2. THE SWARM (Single dynamic scaling orbit)
+                // =========================================================
                 Item {
                     anchors.fill: parent
                     opacity: window.currentPower ? 1.0 : 0.0
@@ -717,33 +729,28 @@ FloatingWindow {
 
                     Repeater {
                         id: orbitRepeater
-                        model: window.activeMode === "wifi" ? wifiListModel : btListModel 
+                        model: (window.currentConn && window.showInfoView) ? infoListModel : (window.activeMode === "wifi" ? wifiListModel : btListModel)
                         
                         delegate: Rectangle {
                             id: floatCard
                             width: 170; height: 60
                             radius: 16
                             
-                            property string itemId: window.activeMode === "wifi" ? ssid : mac
-                            property string itemName: window.activeMode === "wifi" ? ssid : name
+                            property string itemId: id
+                            property string itemName: name
                             property bool isMyBusy: window.busyTask === itemId
                             property bool isPairedBT: window.activeMode === "bt" && action === "Connect"
-                            property bool isTargetWifi: window.activeMode === "wifi" && !window.isWifiConn && ssid === window.targetWifiSsid
-                            property bool isHighlighted: isPairedBT || isTargetWifi
+                            property bool isTargetWifi: window.activeMode === "wifi" && !window.isWifiConn && itemId === window.targetWifiSsid
+                            property bool isSpecialAction: itemId === "action_scan" || itemId === "action_settings"
+                            property bool isHighlighted: isPairedBT || isTargetWifi || isSpecialAction
                             
                             property bool isCurrentlyConnected: (window.activeMode === "wifi" ? (window.wifiConnected && window.wifiConnected.ssid === itemId) : (window.btConnected && window.btConnected.mac === itemId))
                             
-                            // Interaction Locks
-                            property bool locksList: floatMa.containsMouse || floatMa.pressed
-                            onLocksListChanged: {
-                                if (locksList) window.hoveredCardCount++;
-                                else window.hoveredCardCount--;
-                            }
-                            Component.onDestruction: {
-                                if (locksList) window.hoveredCardCount--;
-                            }
+                            property bool isInteractable: !isInfoNode || isActionable
+                            property bool locksList: isInteractable && (floatMa.containsMouse || floatMa.pressed)
+                            onLocksListChanged: { if (locksList) window.hoveredCardCount++; else window.hoveredCardCount--; }
+                            Component.onDestruction: { if (locksList) window.hoveredCardCount--; }
 
-                            // Dynamic Scaling
                             property int activeCount: orbitRepeater.count
                             property real dynamicScale: activeCount > 10 ? Math.max(0.75, 12.0 / activeCount) : 1.0
                             
@@ -751,8 +758,8 @@ FloatingWindow {
                             Behavior on baseAngle { NumberAnimation { duration: 1000; easing.type: Easing.OutBack; easing.overshoot: 0.5 } }
                             property real liveAngle: window.globalOrbitAngle + baseAngle
                             
-                            property real currentRadiusX: 290 + (Math.min(activeCount, 20) * 3)
-                            property real currentRadiusY: 195 + (Math.min(activeCount, 20) * 2.5)
+                            property real currentRadiusX: isInfoNode ? 300 : 290 + (Math.min(activeCount, 20) * 3)
+                            property real currentRadiusY: isInfoNode ? 200 : 195 + (Math.min(activeCount, 20) * 2.5)
 
                             property bool isLoaded: false
                             property real animRadiusX: isLoaded ? currentRadiusX : 0
@@ -788,12 +795,11 @@ FloatingWindow {
                                 NumberAnimation { to: 1.2; duration: 150; easing.type: Easing.OutBack }
                                 NumberAnimation { to: 1.0; duration: 400; easing.type: Easing.OutQuint }
                             }
-                            scale: (!isLoaded ? 0.0 : (floatMa.pressed ? dynamicScale * 0.95 : (floatMa.containsMouse ? dynamicScale * 1.08 : dynamicScale))) * bumpScale
+                            scale: (!isLoaded ? 0.0 : (floatMa.pressed ? dynamicScale * 0.95 : (locksList ? dynamicScale * 1.08 : dynamicScale))) * bumpScale
                             Behavior on scale { NumberAnimation { duration: 300; easing.type: Easing.OutBack } }
                             
-                            z: floatMa.containsMouse ? 10 : index
+                            z: locksList ? 10 : index
 
-                            // Marquee Logic
                             property real nameImplicitWidth: baseNameText.implicitWidth
                             property real nameContainerWidth: nameContainerBase.width
                             property bool doMarquee: floatMa.containsMouse && nameImplicitWidth > nameContainerWidth
@@ -818,22 +824,20 @@ FloatingWindow {
                             property bool triggered: false
                             property real flashOpacity: 0.0
                             
+                            property real renderFill: (isCurrentlyConnected) ? 1.0 : fillLevel
+                            
                             onIsMyBusyChanged: {
                                 if (!isMyBusy && triggered) {
                                     triggered = false;
-                                    if (!floatCard.isCurrentlyConnected) {
-                                        drainAnim.start();
-                                    }
+                                    if (!floatCard.isCurrentlyConnected) drainAnim.start();
                                 }
                             }
                             
                             onIsCurrentlyConnectedChanged: {
-                                if (!isCurrentlyConnected && fillLevel > 0) {
-                                    drainAnim.start();
-                                }
+                                if (!isCurrentlyConnected && fillLevel > 0) drainAnim.start();
                             }
 
-                            color: floatMa.containsMouse ? "#1affffff" : "#0dffffff"
+                            color: locksList ? "#1affffff" : "#0dffffff"
                             Behavior on color { ColorAnimation { duration: 200 } }
 
                             Rectangle {
@@ -842,23 +846,23 @@ FloatingWindow {
                                 color: "transparent"
                                 border.width: 1
                                 border.color: window.surface2
-                                visible: !isHighlighted && !floatMa.containsMouse
+                                visible: !isHighlighted && !locksList
                             }
 
                             Rectangle {
                                 anchors.fill: parent
                                 radius: 16
-                                opacity: floatMa.containsMouse || isHighlighted ? 1.0 : 0.0
+                                opacity: locksList || isHighlighted ? 1.0 : 0.0
                                 color: "transparent"
-                                border.width: isHighlighted && !floatMa.containsMouse ? 1 : 2
+                                border.width: isHighlighted && !locksList ? 1 : 2
                                 Behavior on opacity { NumberAnimation { duration: 250 } }
                                 
                                 Rectangle {
                                     anchors.fill: parent
-                                    anchors.margins: isHighlighted && !floatMa.containsMouse ? 1 : 2
+                                    anchors.margins: isHighlighted && !locksList ? 1 : 2
                                     radius: 14
                                     color: window.base
-                                    opacity: floatMa.containsMouse ? 0.9 : 1.0
+                                    opacity: locksList ? 0.9 : 1.0
                                 }
                                 
                                 gradient: Gradient {
@@ -885,36 +889,30 @@ FloatingWindow {
                                 property real wavePhase: 0.0
                                 
                                 NumberAnimation on wavePhase {
-                                    running: floatCard.fillLevel > 0.0 && floatCard.fillLevel < 1.0
+                                    running: floatCard.renderFill > 0.0 && floatCard.renderFill < 1.0
                                     loops: Animation.Infinite
                                     from: 0; to: Math.PI * 2
                                     duration: 800
                                 }
 
                                 onWavePhaseChanged: requestPaint()
-                                
-                                Connections {
-                                    target: floatCard
-                                    function onFillLevelChanged() { waveCanvas.requestPaint() }
-                                }
+                                Connections { target: floatCard; function onRenderFillChanged() { waveCanvas.requestPaint() } }
 
                                 onPaint: {
                                     var ctx = getContext("2d");
                                     ctx.clearRect(0, 0, width, height);
+                                    if (floatCard.renderFill <= 0.001) return;
 
-                                    if (floatCard.fillLevel <= 0.001) return;
-
-                                    var currentW = width * floatCard.fillLevel;
+                                    var currentW = width * floatCard.renderFill;
                                     var r = 16; 
 
                                     ctx.save();
                                     ctx.beginPath();
                                     ctx.moveTo(0, 0);
                                     
-                                    if (floatCard.fillLevel < 0.99) {
-                                        var waveAmp = 12 * Math.sin(floatCard.fillLevel * Math.PI); 
+                                    if (floatCard.renderFill < 0.99) {
+                                        var waveAmp = 12 * Math.sin(floatCard.renderFill * Math.PI); 
                                         if (currentW - waveAmp < 0) waveAmp = currentW;
-                                        
                                         var cp1x = currentW + Math.sin(wavePhase) * waveAmp;
                                         var cp2x = currentW + Math.cos(wavePhase + Math.PI) * waveAmp;
 
@@ -957,7 +955,7 @@ FloatingWindow {
                                 color: "transparent"
                                 border.color: window.activeColor
                                 border.width: 2
-                                visible: parent.isHighlighted && !parent.isMyBusy
+                                visible: parent.isHighlighted && !parent.isMyBusy && !parent.isCurrentlyConnected
                                 
                                 SequentialAnimation on scale {
                                     loops: Animation.Infinite; running: parent.visible
@@ -1021,7 +1019,7 @@ FloatingWindow {
                                         font.family: "JetBrains Mono"
                                         font.pixelSize: 10
                                         color: floatCard.isMyBusy ? window.activeColor : window.overlay0
-                                        text: floatCard.isMyBusy ? "Connecting..." : (floatCard.fillLevel > 0.1 ? "Hold..." : (window.activeMode === "wifi" ? security : action))
+                                        text: floatCard.isMyBusy ? "Connecting..." : (floatCard.renderFill > 0.1 && floatCard.renderFill < 1.0 ? "Hold..." : action)
                                         Behavior on color { ColorAnimation { duration: 200 } }
                                     }
                                 }
@@ -1031,22 +1029,15 @@ FloatingWindow {
                                 anchors.left: parent.left
                                 anchors.top: parent.top
                                 anchors.bottom: parent.bottom
-                                width: floatCard.width * floatCard.fillLevel
+                                width: floatCard.width * floatCard.renderFill
                                 clip: true
                                 
                                 RowLayout {
-                                    x: baseTextRow.x
-                                    y: baseTextRow.y
-                                    width: baseTextRow.width
-                                    height: baseTextRow.height
+                                    x: baseTextRow.x; y: baseTextRow.y
+                                    width: baseTextRow.width; height: baseTextRow.height
                                     spacing: 10
                                     
-                                    Text {
-                                        font.family: "Iosevka Nerd Font"
-                                        font.pixelSize: 20
-                                        color: window.crust
-                                        text: icon
-                                    }
+                                    Text { font.family: "Iosevka Nerd Font"; font.pixelSize: 20; color: window.crust; text: icon }
                                     
                                     ColumnLayout {
                                         Layout.fillWidth: true
@@ -1056,33 +1047,16 @@ FloatingWindow {
                                             Layout.fillWidth: true
                                             height: 18
                                             clip: true
-                                            
                                             Row {
                                                 x: floatCard.textOffset
                                                 spacing: 30
-                                                Text {
-                                                    text: floatCard.itemName
-                                                    font.family: "JetBrains Mono"
-                                                    font.weight: Font.Bold
-                                                    font.pixelSize: 13
-                                                    color: window.crust
-                                                }
-                                                Text {
-                                                    visible: floatCard.doMarquee
-                                                    text: floatCard.itemName
-                                                    font.family: "JetBrains Mono"
-                                                    font.weight: Font.Bold
-                                                    font.pixelSize: 13
-                                                    color: window.crust
-                                                }
+                                                Text { text: floatCard.itemName; font.family: "JetBrains Mono"; font.weight: Font.Bold; font.pixelSize: 13; color: window.crust }
+                                                Text { visible: floatCard.doMarquee; text: floatCard.itemName; font.family: "JetBrains Mono"; font.weight: Font.Bold; font.pixelSize: 13; color: window.crust }
                                             }
                                         }
-                                        
                                         Text {
-                                            font.family: "JetBrains Mono"
-                                            font.pixelSize: 10
-                                            color: window.crust
-                                            text: floatCard.isMyBusy ? "Connecting..." : (floatCard.fillLevel > 0.1 ? "Hold..." : (window.activeMode === "wifi" ? security : action))
+                                            font.family: "JetBrains Mono"; font.pixelSize: 10; color: window.crust
+                                            text: floatCard.isMyBusy ? "Connecting..." : (floatCard.renderFill > 0.1 && floatCard.renderFill < 1.0 ? "Hold..." : action)
                                         }
                                     }
                                 }
@@ -1091,18 +1065,17 @@ FloatingWindow {
                             MouseArea {
                                 id: floatMa
                                 anchors.fill: parent
-                                hoverEnabled: true
-                                // Perfect lock: Prevents re-clicking if busy or already 100% full
-                                cursorShape: (window.busyTask !== "" || floatCard.triggered || floatCard.isMyBusy || floatCard.fillLevel === 1.0) ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                hoverEnabled: floatCard.isInteractable
+                                cursorShape: (window.busyTask !== "" || floatCard.triggered || floatCard.isMyBusy || floatCard.renderFill === 1.0 || !floatCard.isInteractable) ? Qt.ArrowCursor : Qt.PointingHandCursor
                                 
                                 onPressed: { 
-                                    if (window.busyTask === "" && !floatCard.triggered && !floatCard.isMyBusy && floatCard.fillLevel === 0.0) {
+                                    if (floatCard.isInteractable && window.busyTask === "" && !floatCard.triggered && !floatCard.isMyBusy && floatCard.fillLevel === 0.0) {
                                         drainAnim.stop()
                                         fillAnim.start()
                                     }
                                 }
                                 onReleased: {
-                                    if (!floatCard.triggered && !floatCard.isMyBusy && floatCard.fillLevel < 1.0) {
+                                    if (floatCard.isInteractable && !floatCard.triggered && !floatCard.isMyBusy && floatCard.fillLevel < 1.0) {
                                         fillAnim.stop()
                                         drainAnim.start()
                                     }
@@ -1122,15 +1095,27 @@ FloatingWindow {
                                     cardFlashAnim.start();
                                     cardBumpAnim.start();
                                     
-                                    window.busyTask = floatCard.itemId;
-                                    busyTimeout.start();
-                                    
-                                    let cmd = window.activeMode === "wifi"
-                                        ? "nmcli device wifi connect '" + ssid + "'"
-                                        : "bash " + window.scriptsDir + "/bluetooth_panel_logic.sh --connect " + mac
-                                    
-                                    Quickshell.execDetached(["sh", "-c", cmd]);
-                                    if (window.activeMode === "wifi") wifiPoller.running = true; else btPoller.running = true;
+                                    if (cmdStr === "TOGGLE_VIEW") {
+                                        window.playSfx("switch.wav");
+                                        window.showInfoView = !window.showInfoView;
+                                        floatCard.triggered = false;
+                                        drainAnim.start();
+                                    } else if (isInfoNode && cmdStr) {
+                                        Quickshell.execDetached(["sh", "-c", cmdStr]);
+                                        if (window.activeMode === "bt") btPoller.running = true;
+                                        floatCard.triggered = false;
+                                        drainAnim.start(); 
+                                    } else {
+                                        window.busyTask = floatCard.itemId;
+                                        busyTimeout.start();
+                                        
+                                        let cmd = window.activeMode === "wifi"
+                                            ? "nmcli device wifi connect '" + ssid + "'"
+                                            : "bash " + window.scriptsDir + "/bluetooth_panel_logic.sh --connect " + mac
+                                        
+                                        Quickshell.execDetached(["sh", "-c", cmd]);
+                                        if (window.activeMode === "wifi") wifiPoller.running = true; else btPoller.running = true;
+                                    }
                                 }
                             }
                             
