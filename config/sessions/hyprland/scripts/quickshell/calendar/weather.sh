@@ -8,9 +8,18 @@ daily_cache_file="${cache_dir}/daily_weather_cache.json"
 next_day_cache_file="${cache_dir}/next_day_precache.json"
 
 # API Settings
-KEY="b7aa64e8dc28ccf8945c685151aed1fc"
-ID="2624652"
-UNIT="metric"
+# Load environment variables
+if [ -f "$(dirname "$0")/.env" ]; then
+    export $(grep -v '^#' "$(dirname "$0")/.env" | xargs)
+else
+    echo ".env file not found!"
+    exit 1
+fi
+
+# API Settings from .env
+KEY="$OPENWEATHER_KEY"
+ID="$OPENWEATHER_CITY_ID"
+UNIT="$OPENWEATHER_UNIT"
 
 mkdir -p "${cache_dir}"
 

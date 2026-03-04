@@ -67,7 +67,7 @@
              :space-evenly "false" :vexpand "false" :hexpand "false"
             
             (for ws in WORKSPACES
-                (button :onclick "bash ~/.config/hypr/scripts/quickshell/close_eww.sh ${ws.id}"
+                (button :onclick "bash ~/.config/hypr/scripts/qs_manager.sh ${ws.id}"
                         ;; Class is now dynamic: workspace-btn active/occupied/empty
                         :class "workspace-btn ${ws.state}"
                         ;; Tooltip shows the window name!

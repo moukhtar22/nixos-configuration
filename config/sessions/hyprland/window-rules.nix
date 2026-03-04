@@ -49,7 +49,7 @@
       "float, title:^(battery-popup)$"
       "pin, title:^(battery-popup)$"
 
-      "size 480 680, title:^(battery-popup)$"
+      "size 480 760, title:^(battery-popup)$"
       "move 100%-500 70, title:^(battery-popup)$"
 
 

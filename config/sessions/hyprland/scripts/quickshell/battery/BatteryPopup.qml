@@ -8,7 +8,7 @@ FloatingWindow {
     id: window
     title: "battery-popup"
     width: 480
-    height: 680
+    height: 760 
     color: "transparent"
 
     Shortcut { sequence: "Escape"; onActivated: Qt.quit() }
@@ -48,6 +48,17 @@ FloatingWindow {
     property int upHours: 0
     property int upMins: 0
 
+    property real sysVolume: 0
+    property bool sysMuted: false
+    property real sysBrightness: 0
+
+    // Anti-Jitter Sync States (Locks poller updates when user is dragging)
+    property bool isDraggingVol: false
+    property bool isDraggingBri: false
+
+    Timer { id: volSyncDelay; interval: 800; onTriggered: window.isDraggingVol = false; triggeredOnStart: true; }
+    Timer { id: briSyncDelay; interval: 800; onTriggered: window.isDraggingBri = false; triggeredOnStart: true; }
+
     readonly property bool isCharging: batStatus === "Charging"
 
     // 1. THE CORE: BATTERY RING GRADIENTS (Strictly Battery Driven)
@@ -79,11 +90,7 @@ FloatingWindow {
     }
 
     // 3. DUAL-TONE AMBIENT MAP
-    // The main ambient color is ALWAYS the battery status.
     readonly property color ambientPrimary: window.batColorStart
-    
-    // The secondary ambient color injects the power profile into the environment.
-    // If on "balanced", it defaults to the battery color for a unified look.
     readonly property color ambientSecondary: {
         if (powerProfile === "performance") return window.profileEnd;
         if (powerProfile === "power-saver") return window.profileEnd;
@@ -91,32 +98,50 @@ FloatingWindow {
     }
 
     property real animCapacity: 0
-    Behavior on animCapacity {
-        NumberAnimation { duration: 1200; easing.type: Easing.OutQuint }
-    }
+    Behavior on animCapacity { NumberAnimation { duration: 1200; easing.type: Easing.OutQuint } }
     
     onAnimCapacityChanged: batCanvas.requestPaint()
     onBatColorStartChanged: batCanvas.requestPaint()
 
     Process {
         id: sysPoller
-        command: ["sh", "-c", "echo $(cat /sys/class/power_supply/BAT0/capacity); echo $(cat /sys/class/power_supply/BAT0/status); powerprofilesctl get; awk '{print int($1/3600)\"h \"int(($1%3600)/60)\"m\"}' /proc/uptime"]
+        // Unified shell command polling battery, profile, uptime, amixer audio, and brightnessctl safely.
+        command: ["bash", "-c", 
+            "cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo '0'; " +
+            "cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo 'Unknown'; " +
+            "powerprofilesctl get 2>/dev/null || echo 'balanced'; " +
+            "awk '{print int($1/3600)\"h \"int(($1%3600)/60)\"m\"}' /proc/uptime 2>/dev/null || echo '0h 0m'; " +
+            "amixer sget Master 2>/dev/null | awk -F'[][]' '/%/ {print $2, $4; exit}' | tr -d '%' || echo '0 on'; " +
+            "brightnessctl -m 2>/dev/null | awk -F, '{print substr($4, 1, length($4)-1)}' || echo '0'"
+        ]
         running: true
         stdout: StdioCollector {
             onStreamFinished: {
-                let lines = this.text.trim().split("\n")
-                if (lines.length >= 4) {
+                let lines = this.text.trim().split("\n");
+                if (lines.length >= 6) {
                     if (window.batCapacity !== parseInt(lines[0])) {
-                        window.batCapacity = parseInt(lines[0])
-                        window.animCapacity = window.batCapacity
+                        window.batCapacity = parseInt(lines[0]);
+                        window.animCapacity = window.batCapacity;
                     }
-                    window.batStatus = lines[1]
-                    window.powerProfile = lines[2]
+                    window.batStatus = lines[1];
+                    window.powerProfile = lines[2];
                     
                     let upParts = lines[3].split("h ");
                     if (upParts.length === 2) {
                         window.upHours = parseInt(upParts[0]) || 0;
                         window.upMins = parseInt(upParts[1].replace("m", "")) || 0;
+                    }
+
+                    // Parse Native ALSA Volume directly
+                    if (!window.isDraggingVol) {
+                        let volParts = (lines[4] || "0 on").trim().split(" ");
+                        window.sysVolume = parseInt(volParts[0]) || 0;
+                        window.sysMuted = (volParts[1] === "off");
+                    }
+                    
+                    // Parse Brightnessctl
+                    if (!window.isDraggingBri) {
+                        window.sysBrightness = parseInt(lines[5]) || 0;
                     }
                 }
             }
@@ -124,7 +149,7 @@ FloatingWindow {
     }
 
     Timer {
-        interval: 2000; running: true; repeat: true
+        interval: 1500; running: true; repeat: true; triggeredOnStart: true;
         onTriggered: sysPoller.running = true
     }
 
@@ -154,7 +179,7 @@ FloatingWindow {
             border.width: 1
             clip: true
 
-            // Rotating Background Blobs (Dual-Tone Integration)
+            // Rotating Background Blobs
             Rectangle {
                 width: parent.width * 0.8; height: width; radius: width / 2
                 x: (parent.width / 2 - width / 2) + Math.cos(window.globalOrbitAngle * 2) * 150
@@ -173,7 +198,7 @@ FloatingWindow {
                 Behavior on color { ColorAnimation { duration: 1000 } }
             }
 
-            // Radar Rings (Maps to the secondary ambient/profile state)
+            // Radar Rings
             Item {
                 id: radarItem
                 anchors.fill: parent
@@ -182,7 +207,7 @@ FloatingWindow {
                     model: 3
                     Rectangle {
                         anchors.centerIn: parent
-                        anchors.verticalCenterOffset: -30
+                        anchors.verticalCenterOffset: -70
                         width: 320 + (index * 170)
                         height: width
                         radius: width / 2
@@ -207,7 +232,7 @@ FloatingWindow {
                 transform: Translate { y: -15 * (1.0 - introState) }
                 opacity: introState
                 
-                // Hours Box (Maps to Battery State)
+                // Hours Box
                 Rectangle {
                     width: 44; height: 48; radius: 12
                     color: "#0dffffff"; border.color: "#1affffff"; border.width: 1
@@ -246,7 +271,7 @@ FloatingWindow {
                     }
                 }
 
-                // Mins Box (Maps to Profile State)
+                // Mins Box
                 Rectangle {
                     width: 44; height: 48; radius: 12
                     color: "#0dffffff"; border.color: "#1affffff"; border.width: 1
@@ -293,7 +318,7 @@ FloatingWindow {
             }
 
             // ==========================================
-            // CENTRAL CORE & BATTERY RING (REFINED)
+            // CENTRAL CORE & BATTERY RING 
             // ==========================================
             Item {
                 anchors.fill: parent
@@ -304,7 +329,7 @@ FloatingWindow {
                     width: 260
                     height: width
                     anchors.centerIn: parent
-                    anchors.verticalCenterOffset: -30
+                    anchors.verticalCenterOffset: -70
                     radius: width / 2
                     
                     property bool isDangerState: !window.isCharging && window.batCapacity < 15
@@ -368,7 +393,7 @@ FloatingWindow {
                         }
                     }
 
-                    // Battery Canvas Layer (Strictly Battery Colored)
+                    // Battery Canvas Layer
                     Item {
                         anchors.fill: parent
                         
@@ -437,13 +462,10 @@ FloatingWindow {
                                 
                                 if (heroMa.containsMouse && endAngle > 0.1) {
                                     if (window.isCharging) {
-                                        // Smooth, liquid upward surge overlay
                                         var surgeAngle = parent.pumpPhase * (endAngle + 0.6) - 0.3;
-                                        
                                         if (surgeAngle > 0 && surgeAngle < endAngle) {
                                             var sStart = Math.max(0, surgeAngle - 0.4);
                                             var sEnd = Math.min(endAngle, surgeAngle + 0.4);
-                                            
                                             ctx.beginPath();
                                             ctx.arc(centerX, centerY, radius, sStart, sEnd);
                                             ctx.lineWidth = 22;
@@ -461,7 +483,6 @@ FloatingWindow {
                                             ctx.stroke();
                                         }
                                         
-                                        // Glowing flare at the tip
                                         if (parent.pumpPhase > 0.7) {
                                             var flarePhase = (parent.pumpPhase - 0.7) / 0.3;
                                             var hitX = centerX + Math.cos(endAngle) * radius;
@@ -473,7 +494,6 @@ FloatingWindow {
                                             ctx.fill();
                                         }
                                     } else {
-                                        // Smooth discharge ripples
                                         var drainCenter = parent.dischargePhase * endAngle;
                                         for (var d = 0; d < 2; d++) {
                                             var dSpread = 0.2 + (d * 0.15);
@@ -559,7 +579,178 @@ FloatingWindow {
                 transform: Translate { y: 20 * (1.0 - introState) }
                 opacity: introState
 
-                // 1. SYSTEM ACTIONS DOCK (Vertical Hold-to-Execute)
+                // 1. HARDWARE CONTROLS DOCK (Sliders)
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 96
+                    radius: 24
+                    color: "#05ffffff"
+                    border.color: "#1affffff"
+                    border.width: 1
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 14
+                        spacing: 12
+
+                        // Brightness Slider (Maps to Battery state)
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 15
+
+                            Item {
+                                Layout.preferredWidth: 32
+                                Layout.preferredHeight: 32
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: window.sysBrightness > 66 ? "󰃠" : (window.sysBrightness > 33 ? "󰃟" : "󰃞")
+                                    font.family: "Iosevka Nerd Font"
+                                    font.pixelSize: 22
+                                    color: window.ambientPrimary
+                                    Behavior on color { ColorAnimation { duration: 200 } }
+                                }
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                                height: 18
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 9
+                                    color: "#0dffffff"
+                                    border.color: "#1affffff"
+                                    border.width: 1
+                                    clip: true
+
+                                    Rectangle {
+                                        height: parent.height
+                                        width: parent.width * (window.sysBrightness / 100)
+                                        radius: 9
+                                        opacity: briMa.containsMouse ? 0.9 : 0.7
+                                        Behavior on opacity { NumberAnimation { duration: 200 } }
+                                        // Smoothed width behavior specifically disabled when dragging to ensure 0-latency tracking
+                                        Behavior on width { enabled: !window.isDraggingBri; NumberAnimation { duration: 200; easing.type: Easing.OutQuint } }
+
+                                        gradient: Gradient {
+                                            orientation: Gradient.Horizontal
+                                            GradientStop { position: 0.0; color: window.batColorStart; Behavior on color { ColorAnimation { duration: 300 } } }
+                                            GradientStop { position: 1.0; color: window.batColorEnd; Behavior on color { ColorAnimation { duration: 300 } } }
+                                        }
+                                    }
+                                }
+                                MouseArea {
+                                    id: briMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onPressed: (mouse) => { briSyncDelay.stop(); window.isDraggingBri = true; updateBri(mouse.x); }
+                                    onPositionChanged: (mouse) => { if (pressed) updateBri(mouse.x); }
+                                    onReleased: { briSyncDelay.restart(); }
+                                    
+                                    function updateBri(mx) {
+                                        let pct = Math.max(0, Math.min(100, Math.round((mx / width) * 100)));
+                                        window.sysBrightness = pct; // Optimistic update
+                                        Quickshell.execDetached(["brightnessctl", "set", pct + "%"]);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Volume Slider (Maps to Power Profile state)
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 15
+
+                            // Interactive Mute Toggle Button
+                            Rectangle {
+                                Layout.preferredWidth: 32
+                                Layout.preferredHeight: 32
+                                radius: 16
+                                color: volIconMa.containsMouse ? "#1affffff" : "transparent"
+                                border.color: volIconMa.containsMouse ? window.ambientSecondary : "transparent"
+                                Behavior on color { ColorAnimation { duration: 150 } }
+                                Behavior on border.color { ColorAnimation { duration: 150 } }
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: window.sysMuted || window.sysVolume === 0 ? "󰖁" : (window.sysVolume > 50 ? "󰕾" : "󰖀")
+                                    font.family: "Iosevka Nerd Font"
+                                    font.pixelSize: 22
+                                    color: window.sysMuted ? window.overlay0 : window.ambientSecondary
+                                    Behavior on color { ColorAnimation { duration: 200 } }
+                                }
+                                MouseArea {
+                                    id: volIconMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        volSyncDelay.stop();
+                                        window.isDraggingVol = true; // Lock poller briefly
+                                        window.sysMuted = !window.sysMuted; // Optimistic update
+                                        Quickshell.execDetached(["amixer", "sset", "Master", "toggle"]);
+                                        volSyncDelay.restart();
+                                    }
+                                }
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                                height: 18
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 9
+                                    color: "#0dffffff"
+                                    border.color: "#1affffff"
+                                    border.width: 1
+                                    clip: true
+
+                                    Rectangle {
+                                        height: parent.height
+                                        width: parent.width * (window.sysVolume / 100)
+                                        radius: 9
+                                        
+                                        // Dimmed, frosted gray state when muted to stay perfectly visible but clearly disabled
+                                        opacity: window.sysMuted ? 0.5 : (volMa.containsMouse ? 0.9 : 0.7)
+                                        Behavior on opacity { NumberAnimation { duration: 200 } }
+                                        // Smoothed width behavior specifically disabled when dragging to ensure 0-latency tracking
+                                        Behavior on width { enabled: !window.isDraggingVol; NumberAnimation { duration: 200; easing.type: Easing.OutQuint } }
+
+                                        gradient: Gradient {
+                                            orientation: Gradient.Horizontal
+                                            GradientStop { position: 0.0; color: window.sysMuted ? window.overlay0 : window.profileStart; Behavior on color { ColorAnimation { duration: 300 } } }
+                                            GradientStop { position: 1.0; color: window.sysMuted ? window.subtext0 : window.profileEnd; Behavior on color { ColorAnimation { duration: 300 } } }
+                                        }
+                                    }
+                                }
+                                MouseArea {
+                                    id: volMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onPressed: (mouse) => { volSyncDelay.stop(); window.isDraggingVol = true; updateVol(mouse.x); }
+                                    onPositionChanged: (mouse) => { if (pressed) updateVol(mouse.x); }
+                                    onReleased: { volSyncDelay.restart(); }
+                                    
+                                    function updateVol(mx) {
+                                        let pct = Math.max(0, Math.min(100, Math.round((mx / width) * 100)));
+                                        window.sysVolume = pct; // Optimistic update
+                                        
+                                        if (pct > 0 && window.sysMuted) {
+                                            window.sysMuted = false;
+                                            Quickshell.execDetached(["amixer", "sset", "Master", "unmute"]);
+                                        }
+                                        Quickshell.execDetached(["amixer", "sset", "Master", pct + "%"]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2. SYSTEM ACTIONS DOCK (Vertical Hold-to-Execute)
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 75
@@ -594,7 +785,7 @@ FloatingWindow {
                             
                             // Wave Fill (Vertical)
                             Canvas {
-                                id: waveCanvas
+                                id: actionWaveCanvas
                                 anchors.fill: parent
                                 
                                 property real wavePhase: 0.0
@@ -604,7 +795,7 @@ FloatingWindow {
                                     from: 0; to: Math.PI * 2; duration: 800
                                 }
                                 onWavePhaseChanged: requestPaint()
-                                Connections { target: actionCapsule; function onFillLevelChanged() { waveCanvas.requestPaint() } }
+                                Connections { target: actionCapsule; function onFillLevelChanged() { actionWaveCanvas.requestPaint() } }
                                 
                                 onPaint: {
                                     var ctx = getContext("2d");
@@ -727,7 +918,7 @@ FloatingWindow {
                     }
                 }
 
-                // 2. POWER PROFILES DOCK (SLIDER REDESIGN)
+                // 3. POWER PROFILES DOCK (SLIDER REDESIGN)
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 54

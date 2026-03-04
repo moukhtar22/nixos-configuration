@@ -65,7 +65,7 @@ FloatingWindow {
     readonly property color maroon: "#eba0ac"
     readonly property color peach: "#fab387"
 
-    readonly property string scriptsDir: Quickshell.env.HOME + "/.config/hypr/scripts/quickshell/network"
+    readonly property string scriptsDir: "/home/ilyamiro/.config/hypr/scripts/quickshell/network"
     // -------------------------------------------------------------------------
     // VIEW MODE & CORE STATE
     // -------------------------------------------------------------------------
