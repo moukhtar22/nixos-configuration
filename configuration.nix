@@ -56,14 +56,15 @@
     power-profiles-daemon
     jdk8
     steam-run
+    vulkan-tools
   ];
 
   environment.pathsToLink = [ "/share/gsettings-schemas" ];
 
   # User accounts and security
-  users.users.ilyamiro = {
+  users.users.moukhtar = {
     isNormalUser = true;
-    description = "ilyamiro";
+    description = "moukhtar";
     extraGroups = [ "networkmanager" "wheel" "video" "adbusers"]; # Added "video" group
     packages = with pkgs; [
     #  thunderbird
@@ -77,7 +78,7 @@
 
   security.sudo.extraRules = [
     {
-      users = [ "ilyamiro" ];
+      users = [ "moukhtar" ];
       commands = [
         {
           command = "ALL";
@@ -111,7 +112,7 @@
   home-manager.useGlobalPkgs = true;
   home-manager.useUserPackages = true; 
   
-  home-manager.users.ilyamiro = {
+  home-manager.users.moukhtar = {
     imports = [ ./home.nix ];
   };
 
@@ -159,18 +160,18 @@
   services.flatpak.enable = true;
 
   # Environment Variables
-  # FIX: Changed 'your_user' to 'ilyamiro' to match your actual username
-  environment.variables.XDG_DATA_DIRS = lib.mkForce "/home/ilyamiro/.nix-profile/share:/run/current-system/sw/share";
+  # FIX: Changed 'your_user' to 'moukhtar' to match your actual username
+  environment.variables.XDG_DATA_DIRS = lib.mkForce "/home/moukhtar/.nix-profile/share:/run/current-system/sw/share";
 
   # Networking and time
-  networking.hostName = "ilyamiro"; 
+  networking.hostName = "moukhtar"; 
   
   networking.networkmanager = {
     enable = true;
     wifi.powersave = false; 
   };
    # Set your time zone.
-  time.timeZone = "Europe/Copenhagen";
+  time.timeZone = "Europe/Istanbul";
 
   # Select internationalisation properties.
   i18n.defaultLocale = "en_US.UTF-8";
@@ -288,47 +289,8 @@
     enable32Bit = true; # Required for Steam/CS2
   };
 
-  # Load NVIDIA Drivers
-  services.xserver.videoDrivers = [ "nvidia" ];
-
-  hardware.nvidia = {
-    # Modesetting is required.
-    modesetting.enable = true;
-
-    # Nvidia power management. Experimental, and can cause sleep/suspend to fail.
-    # Enable this if you have graphical corruption after suspend/wake.
-    powerManagement.enable = false;
-
-    # Fine-grained power management. Turns off GPU when not in use.
-    # Experimental and only works on modern Nvidia GPUs (Turing or newer).
-    powerManagement.finegrained = true;
-
-    # Use the NVidia open source kernel module (not to be confused with the
-    # independent third-party "nouveau" open source driver).
-    # Support is limited to the Turing and later architectures.
-    # We set to false here for maximum stability on the mobile 3050.
-    open = false;
-
-    # Enable the Nvidia settings menu,
-    # accessible via `nvidia-settings`.
-    nvidiaSettings = true;
-
-    # Select the stable driver version
-    package = config.boot.kernelPackages.nvidiaPackages.stable;
-
-    # PRIME CONFIGURATION (Hybrid Graphics)
-    prime = {
-      offload = {
-        enable = true;
-        enableOffloadCmd = true;
-      };
-      
-      # Bus IDs derived from your lspci output
-      # NVIDIA: 01:00.0 -> PCI:1:0:0
-      # AMD: 04:00.0 -> PCI:4:0:0
-      nvidiaBusId = "PCI:1:0:0";
-      amdgpuBusId = "PCI:4:0:0";
-    };
+  # Load AMD Drivers
+  services.xserver.videoDrivers = [ "amdgpu" ];  
   };
 
   system.stateVersion = "25.11"; 
