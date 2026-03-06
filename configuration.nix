@@ -138,7 +138,7 @@
 
   # Configure keymap in X11
   services.xserver.xkb = {
-    layout = "us,ru";
+    layout = "us,ara";
     variant = "";
   };
 
