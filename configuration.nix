@@ -140,6 +140,7 @@
   services.xserver.xkb = {
     layout = "us,ara";
     variant = "";
+    options = "grp:alt_shift_toggle,terminate:ctrl_alt_bksp";
   };
 
   # Qt Theming
