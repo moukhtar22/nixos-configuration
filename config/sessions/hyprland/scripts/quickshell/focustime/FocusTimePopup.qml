@@ -38,13 +38,21 @@ Item {
     // -------------------------------------------------------------------------
     property var targetDate: new Date()
     property string selectedDateStr: ""
+    property string selectedAppClass: "" 
+    property string selectedAppName: ""
+    property string selectedAppIcon: ""
     property int totalSeconds: 0
     property string liveActiveApp: "Desktop"
+    
     property var topApps: []
     property var weekData: []
     property real maxWeekTotal: 1 
     property var monthData: []
     property real maxMonthTotal: 1
+    
+    // Updated to 96 blocks for 15-minute intervals (4 bars per hour)
+    property var hourlyData: new Array(96).fill(0)
+    property real maxHourlyTotal: 1
     
     // Animation properties
     property real animatedTotalSeconds: 0
@@ -65,11 +73,7 @@ Item {
     property real introState: 0.0
     Component.onCompleted: {
         introState = 1.0;
-        if (window.isTodaySelected) {
-            liveFileReader.running = true;
-        } else {
-            historicalPoller.running = true;
-        }
+        requestDataUpdate();
     }
     Behavior on introState { NumberAnimation { duration: 800; easing.type: Easing.OutExpo } }
 
@@ -100,9 +104,31 @@ Item {
             window.monthData = parsedMonth;
             syncMonthModel();
         }
+
+        window.hourlyData = data.hourly || new Array(96).fill(0);
+        let currentMaxHour = 1;
+        for(let i=0; i<96; i++) {
+            if (window.hourlyData[i] > currentMaxHour) currentMaxHour = window.hourlyData[i];
+        }
+        window.maxHourlyTotal = currentMaxHour;
     }
 
-    // --- LIVE FILE READER ---
+    // --- DATA FETCHING ROUTING ---
+    function requestDataUpdate() {
+        if (window.selectedAppClass === "" && getIsoDate(window.targetDate) === getIsoDate(new Date())) {
+            liveFileReader.running = true;
+        } else {
+            let cmd = ["python3", window.scriptsDir + "/get_stats.py", getIsoDate(window.targetDate)];
+            if (window.selectedAppClass !== "") {
+                cmd.push("--app");
+                cmd.push(window.selectedAppClass);
+            }
+            statsPoller.command = cmd;
+            statsPoller.running = true;
+        }
+    }
+
+    // --- LIVE FILE READER (For Global Today) ---
     Process {
         id: liveFileReader
         command: ["cat", window.stateFilePath]
@@ -122,13 +148,12 @@ Item {
         interval: 1000
         running: window.isTodaySelected 
         repeat: true
-        onTriggered: liveFileReader.running = true 
+        onTriggered: window.requestDataUpdate()
     }
 
-    // --- HISTORICAL DATA FETCHER ---
+    // --- PYTHON STATS FETCHER (For History & Specific Apps) ---
     Process {
-        id: historicalPoller
-        command: ["python3", window.scriptsDir + "/get_stats.py", getIsoDate(window.targetDate)]
+        id: statsPoller
         stdout: StdioCollector {
             onStreamFinished: {
                 let raw = this.text.trim();
@@ -150,10 +175,7 @@ Item {
     function getFancyDate(d) {
         let monthName = window.monthNames[d.getMonth()];
         let dateNum = d.getDate();
-        
-        let todayIso = getIsoDate(new Date());
-        let isToday = getIsoDate(d) === todayIso;
-        
+        let isToday = getIsoDate(d) === getIsoDate(new Date());
         return isToday ? "Today" : `${monthName} ${dateNum}`;
     }
 
@@ -162,28 +184,17 @@ Item {
         d.setDate(d.getDate() + offsetDays);
         targetDate = d;
         window.isFirstLoad = true; 
-        
-        if (getIsoDate(targetDate) === getIsoDate(new Date())) {
-            liveFileReader.running = true;
-        } else {
-            historicalPoller.running = true;
-        }
+        window.requestDataUpdate();
     }
     
-    // Completely bypasses UTC timezone drifting by forcing Noon local time
     function changeToDate(clickedDateStr) {
         if (!clickedDateStr) return;
         let currentIso = getIsoDate(window.targetDate);
         if (clickedDateStr === currentIso) return;
-        
-        // Append T12:00:00 to avoid any timezone/DST rounding errors
         let dCurrent = new Date(currentIso + "T12:00:00");
         let dClicked = new Date(clickedDateStr + "T12:00:00");
-        
         let diffDays = Math.round((dClicked - dCurrent) / (1000 * 60 * 60 * 24));
-        if (diffDays !== 0) {
-            changeDay(diffDays);
-        }
+        if (diffDays !== 0) changeDay(diffDays);
     }
 
     Timer {
@@ -201,11 +212,15 @@ Item {
             let app = window.topApps[i];
             if (i < appListModel.count) {
                 appListModel.setProperty(i, "name", app.name);
+                appListModel.setProperty(i, "appClass", app.class);
+                appListModel.setProperty(i, "icon", app.icon || "");
                 appListModel.setProperty(i, "seconds", app.seconds);
                 appListModel.setProperty(i, "percent", app.percent);
             } else {
                 appListModel.append({
                     name: app.name,
+                    appClass: app.class,
+                    icon: app.icon || "",
                     seconds: app.seconds,
                     percent: app.percent,
                     idx: i
@@ -301,7 +316,6 @@ Item {
         scale: 0.97 + (0.03 * introState)
         opacity: introState
 
-        // Deep OLED background
         Rectangle {
             anchors.fill: parent
             radius: 28
@@ -310,7 +324,6 @@ Item {
             border.width: 1
             clip: true
 
-            // Flowing Background Circles
             Rectangle {
                 width: parent.width * 1.2; height: width; radius: width / 2
                 x: (parent.width / 2 - width / 2) + Math.cos(window.globalOrbitAngle * 2) * 150
@@ -339,26 +352,75 @@ Item {
                     Layout.topMargin: 4
                     Layout.preferredHeight: 40
                     
-                    Rectangle {
-                        width: 40; height: 40; radius: 20
-                        color: prevWeekMa.containsMouse ? window.surface0 : "transparent"
-                        Behavior on color { ColorAnimation { duration: 150 } }
-                        Text { anchors.centerIn: parent; font.family: "Iosevka Nerd Font"; text: ""; color: window.text; font.pixelSize: 18 }
-                        MouseArea { id: prevWeekMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: changeDay(-1) }
+                    // Left Buttons (Back to App List + Previous Day side-by-side)
+                    Row {
+                        Layout.preferredWidth: window.selectedAppClass !== "" ? 84 : 40
+                        Layout.preferredHeight: 40
+                        spacing: 4
+
+                        // App Return Arrow
+                        Rectangle {
+                            width: 40
+                            height: 40
+                            radius: 20
+                            visible: window.selectedAppClass !== ""
+                            color: backMa.containsMouse ? window.surface0 : "transparent"
+                            Behavior on color { ColorAnimation { duration: 150 } }
+                            Text { anchors.centerIn: parent; font.family: "Iosevka Nerd Font"; text: ""; color: window.text; font.pixelSize: 18 }
+                            MouseArea { 
+                                id: backMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; 
+                                onClicked: { window.selectedAppClass = ""; window.selectedAppName = ""; window.selectedAppIcon = ""; window.requestDataUpdate(); } 
+                            }
+                        }
+
+                        // Prev Week Arrow
+                        Rectangle {
+                            width: 40
+                            height: 40
+                            radius: 20
+                            color: prevWeekMa.containsMouse ? window.surface0 : "transparent"
+                            Behavior on color { ColorAnimation { duration: 150 } }
+                            Text { anchors.centerIn: parent; font.family: "Iosevka Nerd Font"; text: ""; color: window.text; font.pixelSize: 18 }
+                            MouseArea { id: prevWeekMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: changeDay(-1) }
+                        }
                     }
                     
-                    Text {
+                    // Title Area (Includes App Icon if App is selected)
+                    RowLayout {
                         Layout.fillWidth: true
-                        horizontalAlignment: Text.AlignHCenter
-                        font.family: "Inter, Roboto, sans-serif"
-                        font.weight: Font.DemiBold
-                        font.pixelSize: 18
-                        color: window.text
-                        text: window.getFancyDate(window.targetDate)
+                        Layout.alignment: Qt.AlignHCenter
+                        spacing: 8
+                        
+                        Item { Layout.fillWidth: true } // Left Spacer
+
+                        Image {
+                            visible: window.selectedAppClass !== "" && window.selectedAppIcon !== ""
+                            source: window.selectedAppIcon.startsWith("/") ? "file://" + window.selectedAppIcon : "image://icon/" + window.selectedAppIcon
+                            sourceSize: Qt.size(20, 20)
+                            Layout.preferredWidth: 20
+                            Layout.preferredHeight: 20
+                            Layout.alignment: Qt.AlignVCenter
+                            fillMode: Image.PreserveAspectFit
+                        }
+
+                        Text {
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: "Inter, Roboto, sans-serif"
+                            font.weight: Font.DemiBold
+                            font.pixelSize: 18
+                            color: window.text
+                            text: window.selectedAppClass !== "" ? `${window.selectedAppName} - ${window.getFancyDate(window.targetDate)}` : window.getFancyDate(window.targetDate)
+                        }
+
+                        Item { Layout.fillWidth: true } // Right Spacer
                     }
 
+                    // Next Week Arrow
                     Rectangle {
-                        width: 40; height: 40; radius: 20
+                        Layout.preferredWidth: 40
+                        Layout.preferredHeight: 40
+                        radius: 20
                         color: nextWeekMa.containsMouse ? window.surface0 : "transparent"
                         Behavior on color { ColorAnimation { duration: 150 } }
                         Text { anchors.centerIn: parent; font.family: "Iosevka Nerd Font"; text: ""; color: window.text; font.pixelSize: 18 }
@@ -382,7 +444,6 @@ Item {
                         text: window.formatTimeLarge(window.animatedTotalSeconds)
                     }
 
-                    // Dynamic Pill / Text Subtitle
                     Item {
                         Layout.alignment: Qt.AlignHCenter
                         Layout.preferredWidth: pillLoader.width
@@ -391,7 +452,7 @@ Item {
                         Loader {
                             id: pillLoader
                             anchors.centerIn: parent
-                            sourceComponent: window.isTodaySelected ? activePillComponent : historyTextComponent
+                            sourceComponent: (window.isTodaySelected && window.selectedAppClass === "") ? activePillComponent : historyTextComponent
                         }
 
                         Component {
@@ -400,20 +461,18 @@ Item {
                                 implicitWidth: activeAppText.width + 24
                                 implicitHeight: 24
                                 radius: 12
-                                
                                 gradient: Gradient {
                                     orientation: Gradient.Horizontal
                                     GradientStop { position: 0.0; color: window.mauve }
                                     GradientStop { position: 1.0; color: window.blue }
                                 }
-
                                 Text {
                                     id: activeAppText
                                     anchors.centerIn: parent
                                     font.family: "Inter, Roboto, sans-serif"
                                     font.weight: Font.Bold
                                     font.pixelSize: 12
-                                    color: window.crust // High contrast dark text
+                                    color: window.crust
                                     text: window.liveActiveApp
                                 }
                             }
@@ -426,7 +485,7 @@ Item {
                                 font.weight: Font.Medium
                                 font.pixelSize: 13
                                 color: window.subtext0
-                                text: "Total Focus Time"
+                                text: window.selectedAppClass !== "" ? "App Focus Time" : "Total Focus Time"
                             }
                         }
                     }
@@ -554,7 +613,6 @@ Item {
                                         width: 18 
                                         height: 18 
                                         radius: 4
-                                        
                                         color: model.total === -1 ? "transparent" : (model.total === 0 ? window.surface0 : Qt.rgba(window.mauve.r, window.mauve.g, window.mauve.b, Math.min(1.0, 0.3 + 0.7 * (model.total / window.maxMonthTotal))))
                                         Behavior on color { ColorAnimation { duration: 700; easing.type: Easing.OutQuint } }
 
@@ -583,7 +641,7 @@ Item {
                 }
 
                 // ==========================================
-                // 3. APP LIST CARD 
+                // 3. BOTTOM CARD (App List OR Hourly Chart)
                 // ==========================================
                 Rectangle {
                     Layout.fillWidth: true
@@ -593,8 +651,10 @@ Item {
                     border.color: Qt.alpha(window.surface1, 0.3)
                     border.width: 1
 
+                    // --- VIEW A: App List ---
                     ListView {
                         id: appList
+                        visible: window.selectedAppClass === ""
                         anchors.fill: parent
                         anchors.margins: 8
                         anchors.topMargin: 12
@@ -610,11 +670,7 @@ Item {
                             active: appList.moving || appList.movingVertically
                             width: 4
                             policy: ScrollBar.AsNeeded
-                            contentItem: Rectangle {
-                                implicitWidth: 4
-                                radius: 2
-                                color: window.surface2
-                            }
+                            contentItem: Rectangle { implicitWidth: 4; radius: 2; color: window.surface2 }
                         }
                         
                         delegate: Rectangle {
@@ -634,6 +690,13 @@ Item {
                                 id: rowMa
                                 anchors.fill: parent
                                 hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    window.selectedAppClass = model.appClass;
+                                    window.selectedAppName = model.name;
+                                    window.selectedAppIcon = model.icon;
+                                    window.requestDataUpdate();
+                                }
                             }
 
                             ColumnLayout {
@@ -647,6 +710,17 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     
+                                    Image {
+                                        visible: model.icon !== ""
+                                        source: model.icon.startsWith("/") ? "file://" + model.icon : "image://icon/" + model.icon
+                                        sourceSize: Qt.size(20, 20)
+                                        Layout.preferredWidth: 20
+                                        Layout.preferredHeight: 20
+                                        Layout.alignment: Qt.AlignVCenter
+                                        Layout.rightMargin: 8
+                                        fillMode: Image.PreserveAspectFit
+                                    }
+
                                     Text {
                                         Layout.fillWidth: true
                                         font.family: "Inter, Roboto, sans-serif"
@@ -656,7 +730,6 @@ Item {
                                         text: model.name
                                         elide: Text.ElideRight
                                     }
-
                                     Text {
                                         font.family: "Inter, Roboto, sans-serif"
                                         font.weight: Font.Regular
@@ -669,13 +742,7 @@ Item {
                                 Item {
                                     Layout.fillWidth: true
                                     height: 6
-
-                                    Rectangle {
-                                        anchors.fill: parent
-                                        radius: 3
-                                        color: window.crust
-                                    }
-
+                                    Rectangle { anchors.fill: parent; radius: 3; color: window.crust }
                                     Rectangle {
                                         height: parent.height
                                         width: Math.max(6, parent.width * (model.percent / 100.0))
@@ -689,6 +756,68 @@ Item {
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    // --- VIEW B: 24-Hour App Activity Chart (Now 96 chunks) ---
+                    ColumnLayout {
+                        visible: window.selectedAppClass !== ""
+                        anchors.fill: parent
+                        anchors.margins: 16
+                        spacing: 12
+
+                        Text {
+                            Layout.alignment: Qt.AlignHCenter
+                            font.family: "Inter, Roboto, sans-serif"
+                            font.weight: Font.DemiBold
+                            font.pixelSize: 14
+                            color: window.text
+                            text: "Daily usage"
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            spacing: 2 // Reduced spacing so 96 bars fit neatly
+
+                            Repeater {
+                                model: 96 // 4 bars per hour
+                                delegate: Item {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+
+                                    Rectangle {
+                                        anchors.bottom: parent.bottom
+                                        width: parent.width
+                                        height: Math.max(4, parent.height * (window.hourlyData[index] / Math.max(window.maxHourlyTotal, 1)))
+                                        radius: 2
+                                        color: window.hourlyData[index] > 0 ? window.blue : window.surface0
+                                        Behavior on height { NumberAnimation { duration: 600; easing.type: Easing.OutQuint } }
+                                        Behavior on color { ColorAnimation { duration: 400 } }
+
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            onEntered: { parent.opacity = 0.7 }
+                                            onExited: { parent.opacity = 1.0 }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // X-Axis Labels (00:00, 06:00, 12:00, 18:00, 23:00)
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text { font.family: "Inter"; font.pixelSize: 11; color: window.overlay0; text: "12 AM" }
+                            Item { Layout.fillWidth: true }
+                            Text { font.family: "Inter"; font.pixelSize: 11; color: window.overlay0; text: "6 AM" }
+                            Item { Layout.fillWidth: true }
+                            Text { font.family: "Inter"; font.pixelSize: 11; color: window.overlay0; text: "12 PM" }
+                            Item { Layout.fillWidth: true }
+                            Text { font.family: "Inter"; font.pixelSize: 11; color: window.overlay0; text: "6 PM" }
+                            Item { Layout.fillWidth: true }
+                            Text { font.family: "Inter"; font.pixelSize: 11; color: window.overlay0; text: "11 PM" }
                         }
                     }
                 }
