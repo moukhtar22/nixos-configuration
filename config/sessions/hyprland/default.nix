@@ -24,6 +24,7 @@
     fd
     qt6.qtmultimedia
     qt6.qt5compat
+    qt6.qtwebsockets
     ripgrep
     gtk3
     cava

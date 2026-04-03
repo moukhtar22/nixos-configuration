@@ -14,18 +14,12 @@
     initContent = builtins.readFile ./zsh-init.sh;
 
     shellAliases = {
-      edit = "sudoedit";
+      edit = "sudo -E nvim -n";
       gitavail = "ssh-add $HOME/Documents/Важное/recovery_keys/GitHub/github_remote_keys/key";
       update = "sudo nixos-rebuild switch";
       stop = "shutdown now";
       edconf = "sudo -E nvim /etc/nixos/configuration.nix";
-      out = "loginctl terminate-user ilyamiro";
-      edeww = "sudo -E nvim /etc/nixos/config/programs/eww/new-eww/";
-      cateww_bar = ''
-    printf "I am on nix-os system, using hyprland, and I am using eww for my top bar.\n\nI have this eww.yuck:\n%s\n\nAnd this eww.scss:\n%s\n" \
-    "$(cat /etc/nixos/config/programs/eww/new-eww/bar/eww.yuck)" \
-    "$(cat /etc/nixos/config/programs/eww/new-eww/bar/eww.scss)" | wl-copy
-  '';   
+      out = "loginctl terminate-user ilyamiro";  
     };
     
     
