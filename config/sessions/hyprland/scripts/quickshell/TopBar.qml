@@ -146,26 +146,42 @@ PanelWindow {
     }
 
     // Music -------------------------------------
+    // 1. Fast cache reader to smoothly update the timestamp 
     Process {
         id: musicPoller
-        running: true
-        command: ["bash", "-c", "cat /tmp/music_info.json 2>/dev/null || bash ~/.config/hypr/scripts/quickshell/music/music_info.sh"]
+        command: ["bash", "-c", "cat /tmp/music_info.json 2>/dev/null"]
         stdout: StdioCollector {
             onStreamFinished: {
                 let txt = this.text.trim();
                 if (txt !== "") {
                     try { barWindow.musicData = JSON.parse(txt); } catch(e) {}
                 }
-                musicWaiter.running = true;
             }
         }
     }
+
+    // 2. Direct executor for zero-latency UI state changes (play/pause skips)
     Process {
-        id: musicWaiter
-        command: ["bash", "-c", "inotifywait -qq -e modify /tmp/music_info.json 2>/dev/null || sleep 2"]
+        id: musicForceRefresh
+        running: true
+        command: ["bash", "-c", "bash ~/.config/hypr/scripts/quickshell/music/music_info.sh | tee /tmp/music_info.json"]
         stdout: StdioCollector {
-            onStreamFinished: musicPoller.running = true
+            onStreamFinished: {
+                let txt = this.text.trim();
+                if (txt !== "") {
+                    try { barWindow.musicData = JSON.parse(txt); } catch(e) {}
+                }
+            }
         }
+    }
+
+    // 3. Lightweight timer to update the progress clock without freezing
+    Timer {
+        interval: 1000
+        running: true
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: musicPoller.running = true
     }
 
     // Unified System Info ------------------------
@@ -179,29 +195,36 @@ PanelWindow {
                 if (txt !== "") {
                     try {
                         let data = JSON.parse(txt);
-                        barWindow.wifiStatus = data.wifi.status;
-                        barWindow.wifiIcon = data.wifi.icon;
-                        barWindow.wifiSsid = data.wifi.ssid;
+                        
+                        // Targeted Updates
+                        if (barWindow.wifiStatus !== data.wifi.status) barWindow.wifiStatus = data.wifi.status;
+                        if (barWindow.wifiIcon !== data.wifi.icon) barWindow.wifiIcon = data.wifi.icon;
+                        if (barWindow.wifiSsid !== data.wifi.ssid) barWindow.wifiSsid = data.wifi.ssid;
 
-                        barWindow.btStatus = data.bt.status;
-                        barWindow.btIcon = data.bt.icon;
-                        barWindow.btDevice = data.bt.connected;
+                        if (barWindow.btStatus !== data.bt.status) barWindow.btStatus = data.bt.status;
+                        if (barWindow.btIcon !== data.bt.icon) barWindow.btIcon = data.bt.icon;
+                        if (barWindow.btDevice !== data.bt.connected) barWindow.btDevice = data.bt.connected;
 
-                        barWindow.volPercent = data.audio.volume.toString() + "%";
-                        barWindow.volIcon = data.audio.icon;
-                        barWindow.isMuted = (data.audio.is_muted === "true");
+                        let newVol = data.audio.volume.toString() + "%";
+                        if (barWindow.volPercent !== newVol) barWindow.volPercent = newVol;
+                        if (barWindow.volIcon !== data.audio.icon) barWindow.volIcon = data.audio.icon;
+                        
+                        let newMuted = (data.audio.is_muted === "true");
+                        if (barWindow.isMuted !== newMuted) barWindow.isMuted = newMuted;
 
-                        barWindow.batPercent = data.battery.percent.toString() + "%";
-                        barWindow.batIcon = data.battery.icon;
-                        barWindow.batStatus = data.battery.status;
+                        let newBat = data.battery.percent.toString() + "%";
+                        if (barWindow.batPercent !== newBat) barWindow.batPercent = newBat;
+                        if (barWindow.batIcon !== data.battery.icon) barWindow.batIcon = data.battery.icon;
+                        if (barWindow.batStatus !== data.battery.status) barWindow.batStatus = data.battery.status;
 
-                        barWindow.kbLayout = data.keyboard.layout;
+                        if (barWindow.kbLayout !== data.keyboard.layout) barWindow.kbLayout = data.keyboard.layout;
 
                         barWindow.sysPollerLoaded = true;
                         barWindow.fastPollerLoaded = true;
                     } catch(e) {}
                 }
                 sysWaiter.running = true;
+                musicForceRefresh.running = true; // Instantly grab the fresh music data if triggered by DBus
             }
         }
     }
@@ -544,7 +567,7 @@ PanelWindow {
                                     scale: prevMouse.containsMouse ? 1.1 : 1.0
                                     Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
                                 }
-                                MouseArea { id: prevMouse; hoverEnabled: true; anchors.fill: parent; onClicked: Quickshell.execDetached(["playerctl", "previous"]) } 
+                                MouseArea { id: prevMouse; hoverEnabled: true; anchors.fill: parent; onClicked: { Quickshell.execDetached(["playerctl", "previous"]); musicForceRefresh.running = true; } } 
                             }
                             Item { 
                                 Layout.preferredWidth: 28; Layout.preferredHeight: 28; 
@@ -555,7 +578,7 @@ PanelWindow {
                                     scale: playMouse.containsMouse ? 1.15 : 1.0
                                     Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
                                 }
-                                MouseArea { id: playMouse; hoverEnabled: true; anchors.fill: parent; onClicked: Quickshell.execDetached(["playerctl", "play-pause"]) } 
+                                MouseArea { id: playMouse; hoverEnabled: true; anchors.fill: parent; onClicked: { Quickshell.execDetached(["playerctl", "play-pause"]); musicForceRefresh.running = true; } } 
                             }
                             Item { 
                                 Layout.preferredWidth: 24; Layout.preferredHeight: 24; 
@@ -566,7 +589,7 @@ PanelWindow {
                                     scale: nextMouse.containsMouse ? 1.1 : 1.0
                                     Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
                                 }
-                                MouseArea { id: nextMouse; hoverEnabled: true; anchors.fill: parent; onClicked: Quickshell.execDetached(["playerctl", "next"]) } 
+                                MouseArea { id: nextMouse; hoverEnabled: true; anchors.fill: parent; onClicked: { Quickshell.execDetached(["playerctl", "next"]); musicForceRefresh.running = true; } } 
                             }
                         }
                     }

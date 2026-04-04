@@ -56,19 +56,24 @@ toggle_bt() {
 
 ## AUDIO
 get_volume() {
-    if command -v pamixer &> /dev/null; then pamixer --get-volume 2>/dev/null || echo "50"
+    if command -v wpctl &> /dev/null; then wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -oP '\d+\.\d+' | awk '{print int($1*100)}' || echo "50"
+    elif command -v pamixer &> /dev/null; then pamixer --get-volume 2>/dev/null || echo "50"
     elif command -v pactl &> /dev/null; then pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -oP '\d+%' | head -n1 | tr -d '%' || echo "50"
     else echo "50"; fi
 }
 is_muted() {
-    if command -v pamixer &> /dev/null; then
+    if command -v wpctl &> /dev/null; then
+        wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -q "MUTED" && echo "true" || echo "false"
+    elif command -v pamixer &> /dev/null; then
         pamixer --get-mute 2>/dev/null | grep -q "true" && echo "true" || echo "false"
     elif command -v pactl &> /dev/null; then
         pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | grep -q "yes" && echo "true" || echo "false"
     else echo "false"; fi
 }
 toggle_mute() {
-    if command -v pamixer &> /dev/null; then
+    if command -v wpctl &> /dev/null; then
+        wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+    elif command -v pamixer &> /dev/null; then
         pamixer --toggle-mute 2>/dev/null
     elif command -v pactl &> /dev/null; then
         pactl set-sink-mute @DEFAULT_SINK@ toggle 2>/dev/null
@@ -122,7 +127,7 @@ get_battery_icon() {
 
 ## SYSTEM
 get_kb_layout() {
-    local layout=$(hyprctl devices -j | jq -r '.keyboards[] | select(.main == true) | .active_keymap' | head -n1)
+    local layout=$(hyprctl devices -j 2>/dev/null | jq -r '.keyboards[] | select(.main == true) | .active_keymap' | head -n1)
     echo "$layout" | cut -c1-2 | tr '[:lower:]' '[:upper:]'
 }
 
@@ -154,5 +159,5 @@ case $1 in
              battery: { percent: $bat_percent, status: $bat_status, icon: $bat_icon },
              keyboard: { layout: $kb_layout }
            }'
-        ;;
+    ;;
 esac

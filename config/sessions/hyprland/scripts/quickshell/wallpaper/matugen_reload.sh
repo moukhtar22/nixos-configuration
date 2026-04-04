@@ -17,7 +17,9 @@ if command -v swaync-client &> /dev/null; then
     swaync-client -rs
 fi
 
-# Putting swayosd reload into the background to not clutter the reloading process
+# Restarting swayosd.service is currently the ONLY way to reload its CSS.
+# WARNING: This is what causes the sound problems. Because swayosd-server 
+# forcefully reconnects to an audio server on boot, restarting it causes audio drops/pops.
 if systemctl --user is-active --quiet swayosd.service; then
     systemctl --user restart swayosd.service &
 fi

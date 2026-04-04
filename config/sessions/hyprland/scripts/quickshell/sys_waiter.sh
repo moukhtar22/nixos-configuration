@@ -18,6 +18,9 @@ udevadm monitor --subsystem-match=power_supply 2>/dev/null | grep --line-buffere
 # Hyprland layout changes via your existing socket
 socat -u UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock - 2>/dev/null | grep --line-buffered "activelayout" | head -n 1 &
 
+# MPRIS / Playerctl changes via DBus (Session Bus)
+dbus-monitor --session "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/mpris/MediaPlayer2'" 2>/dev/null | grep --line-buffered "interface" | head -n 1 &
+
 # Failsafe: Force a silent UI refresh every 60 seconds just in case an event is missed
 sleep 60 &
 
