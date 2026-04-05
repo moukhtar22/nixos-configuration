@@ -157,6 +157,9 @@ save_and_focus_widget() {
     local current_window=$(hyprctl activewindow -j 2>/dev/null)
     local current_title=$(echo "$current_window" | jq -r '.title // empty')
     local current_addr=$(echo "$current_window" | jq -r '.address // empty')
+    
+    # Grab the active workspace so we can pull the widget to us
+    local active_ws=$(hyprctl activeworkspace -j | jq -r '.id')
 
     if [[ "$current_title" != "qs-master" && -n "$current_addr" && "$current_addr" != "null" ]]; then
         echo "$current_addr" > "$PREV_FOCUS_FILE"
@@ -165,7 +168,8 @@ save_and_focus_widget() {
     # Dispatch focus without warping the cursor (run async with a tiny delay to allow QML to move the window first)
     (
         sleep 0.05
-        hyprctl --batch "keyword cursor:no_warps true ; dispatch focuswindow title:^qs-master$ ; keyword cursor:no_warps false" >/dev/null 2>&1
+        # FOOLPROOF FIX: Move the qs-master window to the currently active workspace silently, THEN focus it.
+        hyprctl --batch "keyword cursor:no_warps true ; dispatch movetoworkspacesilent $active_ws,title:^qs-master$ ; dispatch focuswindow title:^qs-master$ ; keyword cursor:no_warps false" >/dev/null 2>&1
     ) &
 }
 
