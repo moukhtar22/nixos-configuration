@@ -3,7 +3,7 @@
 ### You can find all of my wallpapers **[HERE](https://github.com/ilyamiro/shell-wallpapers)**.
 
 ### Update 05.04.26
-##Arch installer now in alpha testing mode available for everyone. Just run this: 
+### Arch installer now in alpha testing mode available for everyone. A lot of bugs expected. Just run this: 
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/ilyamiro/imperative-dots/master/install.sh)"
