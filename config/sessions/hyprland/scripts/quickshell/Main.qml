@@ -3,79 +3,29 @@ import QtQuick.Window
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import "WindowRegistry.js" as Registry
 
-FloatingWindow {
+PanelWindow {
     id: masterWindow
-    title: "qs-master"
     color: "transparent"
+
+    WlrLayershell.namespace: "qs-master"
+    WlrLayershell.layer: WlrLayer.Overlay
     
-    // Always mapped to prevent Wayland from destroying the surface and Hyprland from auto-centering!
-    visible: true 
+    exclusionMode: ExclusionMode.Ignore 
+    focusable: true
 
-    // Push it off-screen the moment the component loads using Hyprland's dispatcher
-    Component.onCompleted: {
-        Quickshell.execDetached(["bash", "-c", `hyprctl dispatch resizewindowpixel "exact 1 1,title:^(qs-master)$" && hyprctl dispatch movewindowpixel "exact -5000 -5000,title:^(qs-master)$"`]);
+    width: Screen.width
+    height: Screen.height
+
+    visible: isVisible
+
+    MouseArea {
+        anchors.fill: parent
+        enabled: masterWindow.isVisible
+        onClicked: switchWidget("hidden", "")
     }
-
-    // Dynamic monitor tracking
-    property int activeMx: 0
-    property int activeMy: 0
-    property int activeMw: 1920
-    property int activeMh: 1080
-
-    // --- SELF-HEALING GEOMETRY ---
-    // Automatically resizes the physical Hyprland window if the OS resolution changes while open
-    Connections {
-        target: Screen
-        function onWidthChanged() { handleNativeScreenChange(); }
-        function onHeightChanged() { handleNativeScreenChange(); }
-    }
-
-    function handleNativeScreenChange() {
-        if (masterWindow.currentActive === "hidden") return;
-        
-        // 1. Instant pre-emptive UI resize to prevent clipping (0ms delay)
-        masterWindow.activeMw = Screen.width;
-        masterWindow.activeMh = Screen.height;
-        
-        let t = getLayout(masterWindow.currentActive);
-        if (t) {
-            masterWindow.animW = t.w;
-            masterWindow.animH = t.h;
-            masterWindow.width = t.w;
-            masterWindow.height = t.h;
-            Quickshell.execDetached(["bash", "-c", `hyprctl dispatch resizewindowpixel "exact ${t.w} ${t.h},title:^(qs-master)$"`]);
-        }
-        
-        // 2. Fetch absolute truth from Hyprland to fix X/Y offsets asynchronously
-        updatePhysicalBounds.running = true;
-    }
-
-    Process {
-        id: updatePhysicalBounds
-        command: ["bash", "-c", "hyprctl monitors -j | jq -r '.[] | select(.focused==true) | \"\\(.x):\\(.y):\\((.width / (.scale // 1)) | round):\\((.height / (.scale // 1)) | round)\"'"]
-        stdout: StdioCollector {
-            onStreamFinished: {
-                let parts = this.text.trim().split(":");
-                if (parts.length === 4 && masterWindow.currentActive !== "hidden") {
-                    masterWindow.activeMx = parseInt(parts[0]) || 0;
-                    masterWindow.activeMy = parseInt(parts[1]) || 0;
-                    masterWindow.activeMw = parseInt(parts[2]) || 1920;
-                    masterWindow.activeMh = parseInt(parts[3]) || 1080;
-
-                    let t = getLayout(masterWindow.currentActive);
-                    if (t) {
-                        masterWindow.currentX = t.x;
-                        masterWindow.currentY = t.y;
-                        // Only move it this time, since we already resized it instantly above
-                        Quickshell.execDetached(["bash", "-c", `hyprctl dispatch movewindowpixel "exact ${t.x} ${t.y},title:^(qs-master)$"`]);
-                    }
-                }
-            }
-        }
-    }
-    // -----------------------------
 
     property string currentActive: "hidden" 
     onCurrentActiveChanged: {
@@ -86,44 +36,60 @@ FloatingWindow {
     property string activeArg: ""
     property bool disableMorph: false 
     property bool isWallpaperTransition: false 
-
-    // Dynamic duration to allow fast opening but keep morphing smooth
     property int morphDuration: 500
-
-    // Safe park coordinates to avoid cursor traps
-    property int currentX: -5000
-    property int currentY: -5000
 
     property real animW: 1
     property real animH: 1
+    property real animX: 0
+    property real animY: 0
 
     function getLayout(name) {
-        // Outsourced to WindowRegistry.js for cleaner configuration management
-        return Registry.getLayout(name, masterWindow.activeMx, masterWindow.activeMy, masterWindow.activeMw, masterWindow.activeMh);
+        return Registry.getLayout(name, 0, 0, Screen.width, Screen.height);
     }
-    
-    width: 1
-    height: 1
-    implicitWidth: width
-    implicitHeight: height
+
+    // --- RESTORED: SELF-HEALING GEOMETRY ---
+    // Automatically recalculates position and scale if the OS resolution changes
+    Connections {
+        target: Screen
+        function onWidthChanged() { handleNativeScreenChange(); }
+        function onHeightChanged() { handleNativeScreenChange(); }
+    }
+
+    function handleNativeScreenChange() {
+        if (masterWindow.currentActive === "hidden") return;
+        
+        let t = getLayout(masterWindow.currentActive);
+        if (t) {
+            // Update the animation targets. The Behaviors below will 
+            // glide the widget to the new layout perfectly.
+            masterWindow.animX = t.rx;
+            masterWindow.animY = t.ry;
+            masterWindow.animW = t.w;
+            masterWindow.animH = t.h;
+        }
+    }
+    // ---------------------------------------
 
     onIsVisibleChanged: {
         if (isVisible) masterWindow.requestActivate();
     }
 
+    // --- THE WIDGET CONTAINER ---
     Item {
-        anchors.centerIn: parent
+        x: masterWindow.animX
+        y: masterWindow.animY
         width: masterWindow.animW
         height: masterWindow.animH
         clip: true 
 
+        Behavior on x { enabled: !masterWindow.disableMorph; NumberAnimation { duration: masterWindow.morphDuration; easing.type: Easing.InOutCubic } }
+        Behavior on y { enabled: !masterWindow.disableMorph; NumberAnimation { duration: masterWindow.morphDuration; easing.type: Easing.InOutCubic } }
         Behavior on width { enabled: !masterWindow.disableMorph; NumberAnimation { duration: masterWindow.morphDuration; easing.type: Easing.InOutCubic } }
         Behavior on height { enabled: !masterWindow.disableMorph; NumberAnimation { duration: masterWindow.morphDuration; easing.type: Easing.InOutCubic } }
 
         opacity: masterWindow.isVisible ? 1.0 : 0.0
         Behavior on opacity { NumberAnimation { duration: masterWindow.isWallpaperTransition ? 150 : (masterWindow.morphDuration === 500 ? 300 : 200); easing.type: Easing.InOutSine } }
 
-        // INNER FIXED CONTAINER
         Item {
             anchors.centerIn: parent
             width: masterWindow.currentActive !== "hidden" && getLayout(masterWindow.currentActive) ? getLayout(masterWindow.currentActive).w : 1
@@ -134,17 +100,15 @@ FloatingWindow {
                 anchors.fill: parent
                 focus: true
                 
-                // Key bubbling catch-all.
                 Keys.onEscapePressed: {
-                    Quickshell.execDetached(["bash", Quickshell.env("HOME") + "/.config/hypr/scripts/qs_manager.sh", "close"])
-                    event.accepted = true
+                    switchWidget("hidden", "");
+                    event.accepted = true;
                 }
 
                 onCurrentItemChanged: {
                     if (currentItem) currentItem.forceActiveFocus();
                 }
 
-                // Subtler transitions to respect wide layouts like the wallpaper picker
                 replaceEnter: Transition {
                     ParallelAnimation {
                         NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 400; easing.type: Easing.OutExpo }
@@ -162,45 +126,42 @@ FloatingWindow {
     }
 
     function switchWidget(newWidget, arg) {
+        prepTimer.stop();
+        teleportFadeOutTimer.stop();
+        teleportFadeInTimer.stop();
+        delayedClear.stop();
+
         let involvesWallpaper = (newWidget === "wallpaper" || currentActive === "wallpaper");
         masterWindow.isWallpaperTransition = involvesWallpaper;
 
         if (newWidget === "hidden") {
-            if (currentActive !== "hidden" && getLayout(currentActive)) {
-                masterWindow.morphDuration = 250; // FAST CLOSE
+            if (currentActive !== "hidden") {
+                masterWindow.morphDuration = 250; 
                 masterWindow.disableMorph = false;
-                let t = getLayout(currentActive);
-                let cx = Math.floor(t.x + (t.w/2));
-                let cy = Math.floor(t.y + (t.h/2));
                 
                 masterWindow.animW = 1;
                 masterWindow.animH = 1;
-                masterWindow.isVisible = false;
+                masterWindow.isVisible = false; 
                 
-                Quickshell.execDetached(["bash", "-c", `hyprctl dispatch resizewindowpixel "exact 1 1,title:^(qs-master)$" && hyprctl dispatch movewindowpixel "exact ${cx} ${cy},title:^(qs-master)$"`]);
                 delayedClear.start();
             }
         } else {
             if (currentActive === "hidden") {
-                masterWindow.morphDuration = 250; // FAST INITIAL OPEN
+                masterWindow.morphDuration = 250;
                 masterWindow.disableMorph = false;
+                
                 let t = getLayout(newWidget);
-                let cx = Math.floor(t.x + (t.w / 2));
-                let cy = Math.floor(t.y + (t.h / 2));
-
+                masterWindow.animX = t.rx;
+                masterWindow.animY = t.ry;
                 masterWindow.animW = 1;
                 masterWindow.animH = 1;
-                masterWindow.width = 1;
-                masterWindow.height = 1;
-
-                Quickshell.execDetached(["bash", "-c", `hyprctl dispatch movewindowpixel "exact ${cx} ${cy},title:^(qs-master)$"`]);
 
                 prepTimer.newWidget = newWidget;
                 prepTimer.newArg = arg;
                 prepTimer.start();
                 
             } else {
-                masterWindow.morphDuration = 500; // SMOOTH MORPH BETWEEN WIDGETS
+                masterWindow.morphDuration = 500;
                 if (involvesWallpaper) {
                     masterWindow.disableMorph = true;
                     masterWindow.isVisible = false; 
@@ -234,14 +195,10 @@ FloatingWindow {
             masterWindow.currentActive = newWidget;
             masterWindow.activeArg = newArg;
 
+            masterWindow.animX = t.rx;
+            masterWindow.animY = t.ry;
             masterWindow.animW = t.w;
             masterWindow.animH = t.h;
-            masterWindow.width = t.w;
-            masterWindow.height = t.h;
-            masterWindow.currentX = t.x;
-            masterWindow.currentY = t.y;
-
-            Quickshell.execDetached(["bash", "-c", `hyprctl dispatch resizewindowpixel "exact ${t.w} ${t.h},title:^(qs-master)$" && hyprctl dispatch movewindowpixel "exact ${t.x} ${t.y},title:^(qs-master)$"`]);
 
             let props = newWidget === "wallpaper" ? { "widgetArg": newArg } : {};
             widgetStack.replace(t.comp, props, StackView.Immediate);
@@ -274,16 +231,10 @@ FloatingWindow {
         masterWindow.activeArg = arg;
         
         let t = getLayout(newWidget);
+        masterWindow.animX = t.rx;
+        masterWindow.animY = t.ry;
         masterWindow.animW = t.w;
         masterWindow.animH = t.h;
-        masterWindow.width = t.w;
-        masterWindow.height = t.h;
-        masterWindow.currentX = t.x;
-        masterWindow.currentY = t.y;
-        
-        Quickshell.execDetached(["bash", "-c", `hyprctl dispatch resizewindowpixel "exact ${t.w} ${t.h},title:^(qs-master)$" && hyprctl dispatch movewindowpixel "exact ${t.x} ${t.y},title:^(qs-master)$"`]);
-        
-        masterWindow.isVisible = true;
         
         let props = newWidget === "wallpaper" ? { "widgetArg": arg } : {};
 
@@ -292,6 +243,8 @@ FloatingWindow {
         } else {
             widgetStack.replace(t.comp, props);
         }
+        
+        masterWindow.isVisible = true;
     }
 
     Timer {
@@ -310,14 +263,6 @@ FloatingWindow {
                 let parts = rawCmd.split(":");
                 let cmd = parts[0];
                 let arg = parts.length > 1 ? parts[1] : "";
-
-                // Feed monitor dimensions dynamically into masterWindow
-                if (parts.length >= 6) {
-                    masterWindow.activeMx = parseInt(parts[2]) || 0;
-                    masterWindow.activeMy = parseInt(parts[3]) || 0;
-                    masterWindow.activeMw = parseInt(parts[4]) || 1920;
-                    masterWindow.activeMh = parseInt(parts[5]) || 1080;
-                }
 
                 if (cmd === "close") {
                     switchWidget("hidden", "");
@@ -340,10 +285,6 @@ FloatingWindow {
             masterWindow.currentActive = "hidden";
             widgetStack.clear();
             masterWindow.disableMorph = false;
-            
-            // Banished safely back to the shadow realm off-screen
-            let cmd = `hyprctl dispatch resizewindowpixel "exact 1 1,title:^(qs-master)$" && hyprctl dispatch movewindowpixel "exact -5000 -5000,title:^(qs-master)$"`;
-            Quickshell.execDetached(["bash", "-c", cmd]);
         }
     }
 }

@@ -10,6 +10,9 @@
 - Telegram: @sacrificeit
 
 ### Update 05.04.26
+
+## WARNING. THIS CAN BREAK YOUR SYSTEM SO PROCEED ON YOUR OWN RISK.  
+
 ### Arch installer now in alpha testing mode available for everyone. A lot of bugs expected. Just run this: 
 
 ```bash
