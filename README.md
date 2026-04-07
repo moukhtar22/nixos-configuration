@@ -2,6 +2,13 @@
 
 ### You can find all of my wallpapers **[HERE](https://github.com/ilyamiro/shell-wallpapers)**.
 
+## FOR ANY PROBLEMS, contact me:
+- Reddit: r/ilyamiro1
+- X/Twitter: @ilyamirox
+- Discord: @ilyamiro
+- Email: ilyamiro.work@gmail.com
+- Telegram: @sacrificeit
+
 ### Update 05.04.26
 ### Arch installer now in alpha testing mode available for everyone. A lot of bugs expected. Just run this: 
 

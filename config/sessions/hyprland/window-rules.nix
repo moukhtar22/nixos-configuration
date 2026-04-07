@@ -32,12 +32,9 @@
       # ───────── MASTER QUICKSHELL CONTAINER ─────────
       # All widgets now live inside this single, shape-shifting window.
       "float, title:^(qs-master)$"
-      "pin, title:^(qs-master)$"
       "noshadow, title:^(qs-master)$"
       "noborder, title:^(qs-master)$"
       "noinitialfocus, title:^(qs-master)$"
-      "move -5000 -5000, title:^(qs-master)$"
-      
     ];
   };
 }

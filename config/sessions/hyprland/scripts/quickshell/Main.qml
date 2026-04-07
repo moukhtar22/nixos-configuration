@@ -24,6 +24,59 @@ FloatingWindow {
     property int activeMw: 1920
     property int activeMh: 1080
 
+    // --- SELF-HEALING GEOMETRY ---
+    // Automatically resizes the physical Hyprland window if the OS resolution changes while open
+    Connections {
+        target: Screen
+        function onWidthChanged() { handleNativeScreenChange(); }
+        function onHeightChanged() { handleNativeScreenChange(); }
+    }
+
+    function handleNativeScreenChange() {
+        if (masterWindow.currentActive === "hidden") return;
+        
+        // 1. Instant pre-emptive UI resize to prevent clipping (0ms delay)
+        masterWindow.activeMw = Screen.width;
+        masterWindow.activeMh = Screen.height;
+        
+        let t = getLayout(masterWindow.currentActive);
+        if (t) {
+            masterWindow.animW = t.w;
+            masterWindow.animH = t.h;
+            masterWindow.width = t.w;
+            masterWindow.height = t.h;
+            Quickshell.execDetached(["bash", "-c", `hyprctl dispatch resizewindowpixel "exact ${t.w} ${t.h},title:^(qs-master)$"`]);
+        }
+        
+        // 2. Fetch absolute truth from Hyprland to fix X/Y offsets asynchronously
+        updatePhysicalBounds.running = true;
+    }
+
+    Process {
+        id: updatePhysicalBounds
+        command: ["bash", "-c", "hyprctl monitors -j | jq -r '.[] | select(.focused==true) | \"\\(.x):\\(.y):\\((.width / (.scale // 1)) | round):\\((.height / (.scale // 1)) | round)\"'"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                let parts = this.text.trim().split(":");
+                if (parts.length === 4 && masterWindow.currentActive !== "hidden") {
+                    masterWindow.activeMx = parseInt(parts[0]) || 0;
+                    masterWindow.activeMy = parseInt(parts[1]) || 0;
+                    masterWindow.activeMw = parseInt(parts[2]) || 1920;
+                    masterWindow.activeMh = parseInt(parts[3]) || 1080;
+
+                    let t = getLayout(masterWindow.currentActive);
+                    if (t) {
+                        masterWindow.currentX = t.x;
+                        masterWindow.currentY = t.y;
+                        // Only move it this time, since we already resized it instantly above
+                        Quickshell.execDetached(["bash", "-c", `hyprctl dispatch movewindowpixel "exact ${t.x} ${t.y},title:^(qs-master)$"`]);
+                    }
+                }
+            }
+        }
+    }
+    // -----------------------------
+
     property string currentActive: "hidden" 
     onCurrentActiveChanged: {
         Quickshell.execDetached(["bash", "-c", "echo '" + currentActive + "' > /tmp/qs_active_widget"]);

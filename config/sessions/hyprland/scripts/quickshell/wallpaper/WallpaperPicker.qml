@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Window
 import QtCore
 import Qt.labs.folderlistmodel
 import QtMultimedia
@@ -9,6 +10,17 @@ import "../"
 
 Item {
     id: window
+    width: Screen.width
+
+    // --- Responsive Scaling Logic ---
+    Scaler {
+        id: scaler
+        currentWidth: Screen.width
+    }
+    
+    function s(val) { 
+        return scaler.s(val); 
+    }
 
     MatugenColors { id: _theme }
 
@@ -20,7 +32,7 @@ Item {
     property bool initialFocusSet: false
     property int visibleItemCount: -1
     property int scrollAccum: 0
-    property int scrollThreshold: 300 
+    property real scrollThreshold: window.s(300) 
 
     // Filter System Properties
     property string currentFilter: "All"
@@ -35,6 +47,9 @@ Item {
     // Download and Status Tracking Properties
     property bool isDownloadingWallpaper: false
     property string currentDownloadName: ""
+    
+    // STRICT ARCHITECTURAL LOCK
+    property bool isApplying: false 
     
     // Reactive Status Properties
     property bool isStartup: localFolderModel.status === FolderListModel.Loading || srcModel.status === FolderListModel.Loading
@@ -68,7 +83,10 @@ Item {
     // GLOBAL ACTION: APPLY WALLPAPER
     // -------------------------------------------------------------------------
     function applyWallpaper(safeFileName, isVideo) {
-        if (!safeFileName) return;
+        if (!safeFileName || window.isApplying) return;
+        
+        // 1. STRICT LOCK: Instantly block all further mouse and keyboard input
+        window.isApplying = true; 
         
         window.targetWallName = safeFileName
         let cleanName = window.getCleanName(safeFileName)
@@ -78,7 +96,6 @@ Item {
             reloadScript = decodeURIComponent(reloadScript.substring(7))
         }
 
-        // Strictly safe variable escaping to prevent bash injection breaks on files with spaces, ' or characters
         const escapeBash = (str) => String(str).replace(/(["\\$`])/g, '\\$1');
         
         if (window.currentFilter === "Search" && window.hasSearched) {
@@ -91,17 +108,32 @@ Item {
 
             if (alreadyExists) {
                 const applyScript = `
-                    export DEST_FILE="${escapeBash(destFile)}"
-                    export FINAL_THUMB="${escapeBash(finalThumb)}"
-                    export RELOAD_SCRIPT="${escapeBash(reloadScript)}"
-                    
                     (
-                        cp "$DEST_FILE" /tmp/lock_bg.png
+                        # Command UI to close immediately
+                        echo 'close' > /tmp/qs_widget_state
+                        
+                        export DEST_FILE="${escapeBash(destFile)}"
+                        export FINAL_THUMB="${escapeBash(finalThumb)}"
+                        export RELOAD_SCRIPT="${escapeBash(reloadScript)}"
+                        
+                        cp "$DEST_FILE" /tmp/lock_bg.png || true
                         pkill mpvpaper || true
-                        swww img "$DEST_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 &
-                        matugen image "$FINAL_THUMB" && bash "$RELOAD_SCRIPT"
-                        wait
-                    ) >/dev/null 2>&1 & disown
+                        
+                        # Run matugen completely detached so it doesn't block swww execution
+                        ( matugen image "$FINAL_THUMB" || true; bash "$RELOAD_SCRIPT" || true ) &
+                        MATUGEN_PID=$!
+                        
+                        # DETERMINISTIC LOOP: Force swww to succeed.
+                        # It will poll every 50ms up to 20 times until the compositor accepts the frame.
+                        for i in {1..20}; do
+                            if swww img "$DEST_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 >/dev/null 2>&1; then
+                                break
+                            fi
+                            sleep 0.05
+                        done
+                        
+                        wait $MATUGEN_PID
+                    ) </dev/null >/dev/null 2>&1 & disown
                 `;
                 Quickshell.execDetached(["bash", "-c", applyScript]);
             } else {
@@ -129,15 +161,27 @@ Item {
                             fi
                             
                             cp "$TEMP_THUMB" "$FINAL_THUMB"
-                            magick "$DEST_FILE" -resize x420 -quality 70 "$FINAL_THUMB"
-                            cp "$DEST_FILE" /tmp/lock_bg.png
+                            magick "$DEST_FILE" -resize x420 -quality 70 "$FINAL_THUMB" || true
                             
+                            echo 'close' > /tmp/qs_widget_state
+                            
+                            cp "$DEST_FILE" /tmp/lock_bg.png || true
                             pkill mpvpaper || true
-                            swww img "$DEST_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 &
-                            matugen image "$FINAL_THUMB" && bash "$RELOAD_SCRIPT"
-                            wait
+                            
+                            ( matugen image "$FINAL_THUMB" || true; bash "$RELOAD_SCRIPT" || true ) &
+                            MATUGEN_PID=$!
+                            
+                            # DETERMINISTIC LOOP
+                            for i in {1..20}; do
+                                if swww img "$DEST_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 >/dev/null 2>&1; then
+                                    break
+                                fi
+                                sleep 0.05
+                            done
+                            
+                            wait $MATUGEN_PID
                         fi
-                    ) >/dev/null 2>&1 & disown
+                    ) </dev/null >/dev/null 2>&1 & disown
                 `;
                 Quickshell.execDetached(["bash", "-c", downloadScript]);
             }
@@ -159,25 +203,38 @@ Item {
             lockBgCmd = `cp "$THUMB_FILE" /tmp/lock_bg.png`
         } else {
             const randomTransition = window.transitions[Math.floor(Math.random() * window.transitions.length)]
-            wallpaperCmd = `swww img "$WALL_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1`
+            // Inject the deterministic loop directly into the standard command variable
+            wallpaperCmd = `
+                for i in {1..20}; do
+                    if swww img "$WALL_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 >/dev/null 2>&1; then
+                        break
+                    fi
+                    sleep 0.05
+                done
+            `
             lockBgCmd = `cp "$WALL_FILE" /tmp/lock_bg.png`
         }
 
         const fullScript = `
-            export WALL_FILE="${escOriginal}"
-            export THUMB_FILE="${escThumb}"
-            export RELOAD_SCRIPT="${escReload}"
-            
             (
-                ${lockBgCmd}
+                echo 'close' > /tmp/qs_widget_state
+                
+                export WALL_FILE="${escOriginal}"
+                export THUMB_FILE="${escThumb}"
+                export RELOAD_SCRIPT="${escReload}"
+                
+                ${lockBgCmd} || true
                 pkill mpvpaper || true
-                ${wallpaperCmd} &
-                matugen image "$THUMB_FILE" && bash "$RELOAD_SCRIPT"
-                wait
-            ) >/dev/null 2>&1 & disown
+                
+                ( matugen image "$THUMB_FILE" || true; bash "$RELOAD_SCRIPT" || true ) &
+                MATUGEN_PID=$!
+                
+                ${wallpaperCmd}
+                
+                wait $MATUGEN_PID
+            ) </dev/null >/dev/null 2>&1 & disown
         `
         Quickshell.execDetached(["bash", "-c", fullScript])
-        Quickshell.execDetached(["bash", "-c", "echo 'close' > /tmp/qs_widget_state"])
     }
 
     // -------------------------------------------------------------------------
@@ -202,6 +259,7 @@ Item {
         if (!visible) {
             window.initialFocusSet = false;
             window.searchIndexRestored = false;
+            window.isApplying = false; // Free the lock strictly when hidden
             
             if (window.hasSearched) {
                 window.isSearchPaused = true;
@@ -278,7 +336,6 @@ Item {
         }
     }
 
-    // Force layouts and positioning *before* setting index to avoid animation conflicts
     function executeFocusRestore(targetIndex, isSearchRestore, requirePositioning) {
         let targetModel = window.getModelForFilter(window.currentFilter);
         
@@ -346,7 +403,6 @@ Item {
         }
     }
 
-    // Guarantee the exact model is queried regardless of reactive binding propagation delay
     function getModelForFilter(filter) {
         return filter === "Search" ? searchProxyModel : localProxyModel;
     }
@@ -387,7 +443,6 @@ Item {
         window.isOnlineSearch = true;
         window.hasSearched = true;
         
-        // Force count to 0 instantly to prevent "Generating thumbnails..." from flashing
         window.visibleItemCount = 0; 
         
         searchState.searched = true;
@@ -407,7 +462,6 @@ Item {
             echo "Gracefully stopping old processes..."
             echo 'stop' > /tmp/ddg_search_control
             
-            # Safely kill old bash scripts without killing this wrapper
             for p in $(pgrep -f ddg_search.sh); do
                 if [ "$p" != "$$" ] && [ "$p" != "$BASHPID" ]; then
                     kill -9 $p 2>/dev/null || true
@@ -440,19 +494,17 @@ Item {
 
     readonly property var transitions: ["grow", "outer", "any", "wipe", "wave", "pixel", "center"]
 
-    readonly property int itemWidth: 400
-    readonly property int itemHeight: 420
-    readonly property int borderWidth: 3
-    readonly property int spacing: 10
+    readonly property real itemWidth: window.s(400)
+    readonly property real itemHeight: window.s(420)
+    readonly property real borderWidth: window.s(3)
+    readonly property real spacing: window.s(10)
     readonly property real skewFactor: -0.35
 
-    // Mouse input UX throttle (Not a layout logic timer)
     Timer {
         id: scrollThrottle
         interval: 150 
     }
 
-    // Prevents video playback during heavy UI transitions to avoid lag
     property bool isFilterAnimating: false
     Timer {
         id: filterAnimationTimer
@@ -460,7 +512,6 @@ Item {
         onTriggered: window.isFilterAnimating = false
     }
 
-    // Prevents video playback during item-to-item list switching animations
     property bool isItemAnimating: false
     Timer {
         id: itemAnimationTimer
@@ -742,15 +793,11 @@ Item {
         let returningFromSearch = (window._lastFilter === "Search" && window.currentFilter !== "Search");
         window._lastFilter = window.currentFilter;
         
-        // Erase search memory status instantly when we abandon the tab so it triggers fresh when we return
         if (returningFromSearch) {
              window.searchIndexRestored = false;
         }
         
-        // Defer routing logic to ensure the ListView's internal model pointer has fully swapped
-        // We keep isModelChanging true across the closure to protect from ListView default index resets
         Qt.callLater(() => {
-            // Force focus on the wallpaper list so shortcuts work immediately
             view.forceActiveFocus();
 
             if (window.currentFilter === "Search") {
@@ -770,18 +817,19 @@ Item {
     // -------------------------------------------------------------------------
     Shortcut { 
         sequence: "Left"; 
-        enabled: !window.isScrollingBlocked
+        enabled: !window.isScrollingBlocked && !window.isApplying
         onActivated: window.stepToNextValidIndex(-1) 
     }
     Shortcut { 
         sequence: "Right"; 
-        enabled: !window.isScrollingBlocked
+        enabled: !window.isScrollingBlocked && !window.isApplying
         onActivated: window.stepToNextValidIndex(1) 
     }
     
     Shortcut { 
         sequence: "Return"
-        enabled: !searchInput.activeFocus && !window.isScrollingBlocked
+        // Bind the lock firmly to the shortcut to stop multiple keyboard fires
+        enabled: !searchInput.activeFocus && !window.isScrollingBlocked && !window.isApplying
         onActivated: { 
             let targetModel = window.getModelForFilter(window.currentFilter);
             if (view.currentIndex >= 0 && view.currentIndex < targetModel.count) {
@@ -794,9 +842,9 @@ Item {
         } 
     }
     
-    Shortcut { sequence: "Escape"; onActivated: { if (window.currentFilter === "Search") { window.currentFilter = "All"; } } }
-    Shortcut { sequence: "Tab"; onActivated: window.cycleFilter(1) }
-    Shortcut { sequence: "Backtab"; onActivated: window.cycleFilter(-1) }
+    Shortcut { sequence: "Escape"; enabled: !window.isApplying; onActivated: { if (window.currentFilter === "Search") { window.currentFilter = "All"; } } }
+    Shortcut { sequence: "Tab"; enabled: !window.isApplying; onActivated: window.cycleFilter(1) }
+    Shortcut { sequence: "Backtab"; enabled: !window.isApplying; onActivated: window.cycleFilter(-1) }
 
     // -------------------------------------------------------------------------
     // CONTENT & DUAL MODELS
@@ -806,7 +854,6 @@ Item {
     
     readonly property var activeModel: window.currentFilter === "Search" ? searchProxyModel : localProxyModel
 
-    // Local Wallpapers Model Logic
     FolderListModel {
         id: localFolderModel
         folder: window.thumbDir
@@ -844,7 +891,6 @@ Item {
         }
     }
 
-    // Search Thumbnails Model Logic
     FolderListModel {
         id: searchFolderModel
         folder: window.searchDir
@@ -901,7 +947,7 @@ Item {
         anchors.fill: parent
         
         opacity: window.isReady ? 1.0 : 0.0
-        anchors.margins: window.isReady ? 0 : 40 
+        anchors.margins: window.isReady ? 0 : window.s(40) 
         
         Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.OutQuart } }
         Behavior on anchors.margins { NumberAnimation { duration: 700; easing.type: Easing.OutExpo } }
@@ -910,7 +956,7 @@ Item {
         orientation: ListView.Horizontal
         clip: false 
 
-        interactive: !window.isScrollingBlocked
+        interactive: !window.isScrollingBlocked && !window.isApplying
         cacheBuffer: 2000
 
         highlightRangeMode: ListView.StrictlyEnforceRange
@@ -924,7 +970,6 @@ Item {
             window.isItemAnimating = true;
             itemAnimationTimer.restart();
 
-            // Guard: completely ignore index resets if the view's internal model doesn't match the search state yet
             if (view.model !== searchProxyModel || window.currentFilter !== "Search") return;
             
             if (!window.isModelChanging && window.hasSearched && window.searchIndexRestored) {
@@ -960,7 +1005,7 @@ Item {
             acceptedButtons: Qt.NoButton 
 
             onWheel: (wheel) => {
-                if (window.isScrollingBlocked) {
+                if (window.isScrollingBlocked || window.isApplying) {
                     wheel.accepted = true;
                     return;
                 }
@@ -999,7 +1044,7 @@ Item {
             readonly property bool matchesFilter: window.checkItemMatchesFilter(safeFileName, isVideo, window.cacheVersion, window.currentFilter)
             
             readonly property real targetWidth: isVisuallyEnlarged ? (window.itemWidth * 1.5) : (window.itemWidth * 0.5)
-            readonly property real targetHeight: isVisuallyEnlarged ? (window.itemHeight + 30) : window.itemHeight 
+            readonly property real targetHeight: isVisuallyEnlarged ? (window.itemHeight + window.s(30)) : window.itemHeight 
             
             property bool isPlayingVideo: false
 
@@ -1031,7 +1076,7 @@ Item {
 
             height: matchesFilter ? targetHeight : 0
             anchors.verticalCenter: parent.verticalCenter
-            anchors.verticalCenterOffset: 15 
+            anchors.verticalCenterOffset: window.s(15) 
 
             z: isVisuallyEnlarged ? 10 : 1
             
@@ -1054,7 +1099,8 @@ Item {
                 
                 MouseArea {
                     anchors.fill: parent
-                    enabled: delegateRoot.matchesFilter && !window.isScrollingBlocked
+                    // Lock inputs completely on the delegate as well
+                    enabled: delegateRoot.matchesFilter && !window.isScrollingBlocked && !window.isApplying
                     onClicked: {
                         view.currentIndex = index
                         window.applyWallpaper(delegateRoot.safeFileName, delegateRoot.isVideo)
@@ -1078,9 +1124,9 @@ Item {
 
                     Image {
                         anchors.centerIn: parent
-                        anchors.horizontalCenterOffset: -50 
-                        width: (window.itemWidth * 1.5) + ((window.itemHeight + 30) * Math.abs(window.skewFactor)) + 50
-                        height: window.itemHeight + 30
+                        anchors.horizontalCenterOffset: window.s(-50) 
+                        width: (window.itemWidth * 1.5) + ((window.itemHeight + window.s(30)) * Math.abs(window.skewFactor)) + window.s(50)
+                        height: window.itemHeight + window.s(30)
                         fillMode: Image.PreserveAspectCrop
                         source: fileUrl !== undefined ? fileUrl : ""
                         asynchronous: true
@@ -1102,9 +1148,9 @@ Item {
                     VideoOutput {
                         id: previewOutput
                         anchors.centerIn: parent
-                        anchors.horizontalCenterOffset: -50 
-                        width: (window.itemWidth * 1.5) + ((window.itemHeight + 30) * Math.abs(window.skewFactor)) + 50
-                        height: window.itemHeight + 30
+                        anchors.horizontalCenterOffset: window.s(-50) 
+                        width: (window.itemWidth * 1.5) + ((window.itemHeight + window.s(30)) * Math.abs(window.skewFactor)) + window.s(50)
+                        height: window.itemHeight + window.s(30)
                         fillMode: VideoOutput.PreserveAspectCrop
                         visible: delegateRoot.isPlayingVideo && previewPlayer.playbackState === MediaPlayer.PlayingState
 
@@ -1118,10 +1164,10 @@ Item {
                         visible: delegateRoot.isVideo && (!delegateRoot.isPlayingVideo || previewPlayer.playbackState !== MediaPlayer.PlayingState)
                         anchors.top: parent.top
                         anchors.right: parent.right
-                        anchors.margins: 10
-                        width: 32
-                        height: 32
-                        radius: 6
+                        anchors.margins: window.s(10)
+                        width: window.s(32)
+                        height: window.s(32)
+                        radius: window.s(6)
                         color: "#60000000" 
                         transform: Matrix4x4 {
                             property real s: -window.skewFactor
@@ -1130,14 +1176,18 @@ Item {
                         
                         Canvas {
                             anchors.fill: parent
-                            anchors.margins: 8 
+                            anchors.margins: window.s(8)
+                            property real scaleTrigger: window.s(1)
+                            onScaleTriggerChanged: requestPaint()
                             onPaint: {
                                 var ctx = getContext("2d");
+                                var s = window.s;
+                                ctx.reset();
                                 ctx.fillStyle = "#EEFFFFFF"; 
                                 ctx.beginPath();
-                                ctx.moveTo(4, 0);
-                                ctx.lineTo(14, 8);
-                                ctx.lineTo(4, 16);
+                                ctx.moveTo(s(4), 0);
+                                ctx.lineTo(s(14), s(8));
+                                ctx.lineTo(s(4), s(16));
                                 ctx.closePath();
                                 ctx.fill();
                             }
@@ -1155,16 +1205,16 @@ Item {
         id: filterBarBackground
         anchors.top: parent.top
         
-        anchors.topMargin: window.isReady ? 40 : -100 
+        anchors.topMargin: window.isReady ? window.s(40) : window.s(-100) 
         opacity: window.isReady ? 1.0 : 0.0
         Behavior on anchors.topMargin { NumberAnimation { duration: 600; easing.type: Easing.OutExpo } }
         Behavior on opacity { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
 
         anchors.horizontalCenter: parent.horizontalCenter
         z: 20
-        height: 56
-        width: filterRow.width + 24
-        radius: 14 
+        height: window.s(56)
+        width: filterRow.width + window.s(24)
+        radius: window.s(14) 
         
         color: Qt.rgba(_theme.mantle.r, _theme.mantle.g, _theme.mantle.b, 0.90)
         border.color: Qt.rgba(_theme.surface2.r, _theme.surface2.g, _theme.surface2.b, 0.8)
@@ -1173,16 +1223,16 @@ Item {
         Row {
             id: filterRow
             anchors.centerIn: parent
-            spacing: 12
+            spacing: window.s(12)
 
             Rectangle {
                 id: notifDrawer
-                height: 44
-                property real paddingLeft: window.showSpinner ? 40 : 16
-                property real targetWidth: window.showNotification ? Math.min(notifTextDrawer.implicitWidth + paddingLeft + 20, 300) : 0
+                height: window.s(44)
+                property real paddingLeft: window.showSpinner ? window.s(40) : window.s(16)
+                property real targetWidth: window.showNotification ? Math.min(notifTextDrawer.implicitWidth + paddingLeft + window.s(20), window.s(300)) : 0
                 width: targetWidth
                 visible: width > 0.1 
-                radius: 10 
+                radius: window.s(10) 
                 clip: true
                 
                 color: window.showNotification ? Qt.rgba(_theme.surface2.r, _theme.surface2.g, _theme.surface2.b, 0.5) : "transparent"
@@ -1197,27 +1247,32 @@ Item {
 
                 Item {
                     visible: window.showSpinner
-                    width: 44
-                    height: 44
+                    width: window.s(44)
+                    height: window.s(44)
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
 
                     Canvas {
                         id: notifSpinner
-                        width: 14; height: 14
+                        width: window.s(14)
+                        height: window.s(14)
                         anchors.centerIn: parent
+                        property real scaleTrigger: window.s(1)
+                        onScaleTriggerChanged: requestPaint()
+
                         onPaint: {
                             var ctx = getContext("2d");
+                            var s = window.s;
                             ctx.reset();
-                            ctx.lineWidth = 2;
+                            ctx.lineWidth = s(2);
                             ctx.strokeStyle = Qt.rgba(_theme.text.r, _theme.text.g, _theme.text.b, 0.3);
                             ctx.beginPath();
-                            ctx.arc(7, 7, 5, 0, Math.PI * 2);
+                            ctx.arc(s(7), s(7), s(5), 0, Math.PI * 2);
                             ctx.stroke();
                             
                             ctx.strokeStyle = Qt.rgba(_theme.text.r, _theme.text.g, _theme.text.b, 0.9);
                             ctx.beginPath();
-                            ctx.arc(7, 7, 5, 0, Math.PI * 0.5);
+                            ctx.arc(s(7), s(7), s(5), 0, Math.PI * 0.5);
                             ctx.stroke();
                         }
                         RotationAnimation on rotation {
@@ -1232,14 +1287,14 @@ Item {
                 Text {
                     id: notifTextDrawer
                     anchors.left: parent.left
-                    anchors.leftMargin: window.showSpinner ? 40 : 16
+                    anchors.leftMargin: window.showSpinner ? window.s(40) : window.s(16)
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.min(implicitWidth, 300 - anchors.leftMargin - 16)
+                    width: Math.min(implicitWidth, window.s(300) - anchors.leftMargin - window.s(16))
                     text: window.currentNotification
                     
                     color: _theme.text
                     font.family: "JetBrains Mono"
-                    font.pixelSize: 14
+                    font.pixelSize: window.s(14)
                     font.bold: true
                     elide: Text.ElideRight
 
@@ -1256,19 +1311,19 @@ Item {
 
                 delegate: Item {
                     visible: modelData.name !== "Search"
-                    width: !visible ? 0 : ((modelData.name === "Video" || modelData.name === "All") ? 44 : (modelData.hex === "" ? filterText.contentWidth + 24 : 36))
-                    height: !visible ? 0 : 36
+                    width: !visible ? 0 : ((modelData.name === "Video" || modelData.name === "All") ? window.s(44) : (modelData.hex === "" ? filterText.contentWidth + window.s(24) : window.s(36)))
+                    height: !visible ? 0 : window.s(36)
                     anchors.verticalCenter: parent.verticalCenter
                     
                     Rectangle {
                         anchors.fill: parent
-                        radius: 10 
+                        radius: window.s(10) 
                         color: modelData.hex === "" 
                                 ? (window.currentFilter === modelData.name ? _theme.surface2 : "transparent") 
                                 : modelData.hex
                         
                         border.color: window.currentFilter === modelData.name ? _theme.text : Qt.rgba(_theme.surface1.r, _theme.surface1.g, _theme.surface1.b, 0.6)
-                        border.width: window.currentFilter === modelData.name ? 2 : 1
+                        border.width: window.currentFilter === modelData.name ? window.s(2) : 1
                         scale: window.currentFilter === modelData.name ? 1.15 : (filterMouse.containsMouse ? 1.08 : 1.0)
                         
                         Behavior on scale { NumberAnimation { duration: 400; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
@@ -1281,26 +1336,30 @@ Item {
                             anchors.centerIn: parent
                             color: window.currentFilter === modelData.name ? _theme.text : Qt.rgba(_theme.text.r, _theme.text.g, _theme.text.b, 0.7)
                             font.family: "JetBrains Mono"
+                            font.pixelSize: window.s(14)
                             font.bold: window.currentFilter === modelData.name
                             Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.OutQuart } }
                         }
 
                         Canvas {
                             visible: modelData.name === "Video"
-                            width: 14; height: 16
+                            width: window.s(14); height: window.s(16)
                             anchors.centerIn: parent
-                            anchors.horizontalCenterOffset: 2 
+                            anchors.horizontalCenterOffset: window.s(2) 
                             property string activeColor: window.currentFilter === modelData.name ? _theme.text : Qt.rgba(_theme.text.r, _theme.text.g, _theme.text.b, 0.7)
                             onActiveColorChanged: requestPaint()
+                            property real scaleTrigger: window.s(1)
+                            onScaleTriggerChanged: requestPaint()
 
                             onPaint: {
                                 var ctx = getContext("2d");
+                                var s = window.s;
                                 ctx.reset();
                                 ctx.fillStyle = activeColor; 
                                 ctx.beginPath();
                                 ctx.moveTo(0, 0);
-                                ctx.lineTo(14, 8);
-                                ctx.lineTo(0, 16);
+                                ctx.lineTo(s(14), s(8));
+                                ctx.lineTo(0, s(16));
                                 ctx.closePath();
                                 ctx.fill();
                             }
@@ -1308,19 +1367,22 @@ Item {
 
                         Canvas {
                             visible: modelData.name === "All"
-                            width: 14; height: 14
+                            width: window.s(14); height: window.s(14)
                             anchors.centerIn: parent
                             property string activeColor: window.currentFilter === modelData.name ? _theme.text : Qt.rgba(_theme.text.r, _theme.text.g, _theme.text.b, 0.7)
                             onActiveColorChanged: requestPaint()
+                            property real scaleTrigger: window.s(1)
+                            onScaleTriggerChanged: requestPaint()
 
                             onPaint: {
                                 var ctx = getContext("2d");
+                                var s = window.s;
                                 ctx.reset();
                                 ctx.fillStyle = activeColor;
-                                ctx.fillRect(0, 0, 6, 6);
-                                ctx.fillRect(8, 0, 6, 6);
-                                ctx.fillRect(0, 8, 6, 6);
-                                ctx.fillRect(8, 8, 6, 6);
+                                ctx.fillRect(0, 0, s(6), s(6));
+                                ctx.fillRect(s(8), 0, s(6), s(6));
+                                ctx.fillRect(0, s(8), s(6), s(6));
+                                ctx.fillRect(s(8), s(8), s(6), s(6));
                             }
                         }
                     }
@@ -1329,6 +1391,7 @@ Item {
                         id: filterMouse
                         anchors.fill: parent
                         hoverEnabled: true 
+                        enabled: !window.isApplying // Lock UI interaction
                         onClicked: window.currentFilter = modelData.name
                         cursorShape: Qt.PointingHandCursor
                     }
@@ -1338,13 +1401,13 @@ Item {
             Rectangle {
                 id: searchControlBtn
                 visible: window.currentFilter === "Search" && window.hasSearched
-                width: visible ? 44 : 0
-                height: 44
-                radius: 10 
+                width: visible ? window.s(44) : 0
+                height: window.s(44)
+                radius: window.s(10) 
                 clip: true
                 color: window.isSearchPaused ? _theme.surface2 : "transparent"
                 border.color: window.isSearchPaused ? _theme.text : Qt.rgba(_theme.surface1.r, _theme.surface1.g, _theme.surface1.b, 0.6)
-                border.width: window.isSearchPaused ? 2 : 1
+                border.width: window.isSearchPaused ? window.s(2) : 1
                 
                 Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutBack; easing.overshoot: 0.5 } }
                 Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.OutQuart } }
@@ -1353,30 +1416,34 @@ Item {
                     id: scMouse
                     anchors.fill: parent
                     hoverEnabled: true
+                    enabled: !window.isApplying // Lock UI interaction
                     cursorShape: Qt.PointingHandCursor
                     onClicked: window.isSearchPaused = !window.isSearchPaused
                 }
                 
                 Canvas {
-                    width: 44; height: 44
+                    width: window.s(44); height: window.s(44)
                     anchors.centerIn: parent
                     property bool paused: window.isSearchPaused
                     property string activeColor: paused ? _theme.text : (scMouse.containsMouse ? _theme.text : Qt.rgba(_theme.text.r, _theme.text.g, _theme.text.b, 0.7))
                     onActiveColorChanged: requestPaint()
                     onPausedChanged: requestPaint()
+                    property real scaleTrigger: window.s(1)
+                    onScaleTriggerChanged: requestPaint()
                     
                     onPaint: {
                         var ctx = getContext("2d");
+                        var s = window.s;
                         ctx.reset();
                         ctx.fillStyle = activeColor;
                         if (!paused) {
-                            ctx.fillRect(15, 14, 4, 16);
-                            ctx.fillRect(25, 14, 4, 16);
+                            ctx.fillRect(s(15), s(14), s(4), s(16));
+                            ctx.fillRect(s(25), s(14), s(4), s(16));
                         } else {
                             ctx.beginPath();
-                            ctx.moveTo(16, 12);
-                            ctx.lineTo(32, 22);
-                            ctx.lineTo(16, 32);
+                            ctx.moveTo(s(16), s(12));
+                            ctx.lineTo(s(32), s(22));
+                            ctx.lineTo(s(16), s(32));
                             ctx.closePath();
                             ctx.fill();
                         }
@@ -1386,14 +1453,14 @@ Item {
 
             Rectangle {
                 id: searchBox
-                height: 44
-                width: window.currentFilter === "Search" ? 360 : 44 
-                radius: 10 
+                height: window.s(44)
+                width: window.currentFilter === "Search" ? window.s(360) : window.s(44) 
+                radius: window.s(10) 
                 clip: true
                 
                 color: window.currentFilter === "Search" ? Qt.rgba(_theme.surface2.r, _theme.surface2.g, _theme.surface2.b, 0.8) : "transparent"
                 border.color: window.currentFilter === "Search" ? Qt.rgba(_theme.text.r, _theme.text.g, _theme.text.b, 0.5) : Qt.rgba(_theme.surface1.r, _theme.surface1.g, _theme.surface1.b, 0.6)
-                border.width: window.currentFilter === "Search" ? 2 : 1
+                border.width: window.currentFilter === "Search" ? window.s(2) : 1
                 
                 Behavior on width { NumberAnimation { duration: 600; easing.type: Easing.OutBack; easing.overshoot: 0.5 } }
                 Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.OutQuart } }
@@ -1403,6 +1470,7 @@ Item {
                     id: searchMouseArea
                     anchors.fill: parent
                     hoverEnabled: true 
+                    enabled: !window.isApplying // Lock UI interaction
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         if (window.currentFilter !== "Search") {
@@ -1415,26 +1483,29 @@ Item {
 
                 Canvas {
                     id: searchIcon
-                    width: 44
-                    height: 44
+                    width: window.s(44)
+                    height: window.s(44)
                     anchors.left: parent.left
-                    anchors.leftMargin: window.currentFilter === "Search" ? 5 : 0 
+                    anchors.leftMargin: window.currentFilter === "Search" ? window.s(5) : 0 
                     anchors.verticalCenter: parent.verticalCenter
                     Behavior on anchors.leftMargin { NumberAnimation { duration: 500; easing.type: Easing.OutExpo } }
                     property string activeColor: window.currentFilter === "Search" ? _theme.text : (searchMouseArea.containsMouse ? _theme.text : Qt.rgba(_theme.text.r, _theme.text.g, _theme.text.b, 0.7))
                     onActiveColorChanged: requestPaint()
+                    property real scaleTrigger: window.s(1)
+                    onScaleTriggerChanged: requestPaint()
 
                     onPaint: {
                         var ctx = getContext("2d");
+                        var s = window.s;
                         ctx.reset();
-                        ctx.lineWidth = 3; 
+                        ctx.lineWidth = s(3); 
                         ctx.strokeStyle = activeColor;
                         ctx.beginPath();
-                        ctx.arc(18, 18, 7, 0, Math.PI * 2);
+                        ctx.arc(s(18), s(18), s(7), 0, Math.PI * 2);
                         ctx.stroke();
                         ctx.beginPath();
-                        ctx.moveTo(23, 23);
-                        ctx.lineTo(31, 31);
+                        ctx.moveTo(s(23), s(23));
+                        ctx.lineTo(s(31), s(31));
                         ctx.stroke();
                     }
                 }
@@ -1443,7 +1514,7 @@ Item {
                     id: searchInput
                     anchors.left: searchIcon.right
                     anchors.right: submitBtn.left 
-                    anchors.rightMargin: 8
+                    anchors.rightMargin: window.s(8)
                     anchors.verticalCenter: parent.verticalCenter
                     
                     opacity: window.currentFilter === "Search" ? 1.0 : 0.0
@@ -1452,7 +1523,7 @@ Item {
                     
                     color: _theme.text
                     font.family: "JetBrains Mono"
-                    font.pixelSize: 16 
+                    font.pixelSize: window.s(16) 
                     clip: true
                     
                     onTextEdited: {
@@ -1469,11 +1540,11 @@ Item {
 
                 Rectangle {
                     id: submitBtn
-                    width: 32
-                    height: 32
-                    radius: 8 
+                    width: window.s(32)
+                    height: window.s(32)
+                    radius: window.s(8) 
                     anchors.right: parent.right
-                    anchors.rightMargin: 8
+                    anchors.rightMargin: window.s(8)
                     anchors.verticalCenter: parent.verticalCenter
                     
                     opacity: window.currentFilter === "Search" ? 1.0 : 0.0
@@ -1490,31 +1561,36 @@ Item {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
                         hoverEnabled: true
+                        enabled: !window.isApplying // Lock UI interaction
                         onClicked: {
                             window.triggerOnlineSearch();
                         }
                     }
 
                     Canvas {
-                        width: 16
-                        height: 16
+                        width: window.s(16)
+                        height: window.s(16)
                         anchors.centerIn: parent
                         property string activeColor: submitMouseArea.containsMouse ? _theme.text : Qt.rgba(_theme.text.r, _theme.text.g, _theme.text.b, 0.7)
                         onActiveColorChanged: requestPaint()
+                        property real scaleTrigger: window.s(1)
+                        onScaleTriggerChanged: requestPaint()
+                        
                         onPaint: {
                             var ctx = getContext("2d");
+                            var s = window.s;
                             ctx.reset();
-                            ctx.lineWidth = 2;
+                            ctx.lineWidth = s(2);
                             ctx.lineCap = "round";
                             ctx.lineJoin = "round";
                             ctx.strokeStyle = activeColor;
                             
                             ctx.beginPath();
-                            ctx.moveTo(2, 8);
-                            ctx.lineTo(14, 8);
-                            ctx.moveTo(9, 3);
-                            ctx.lineTo(14, 8);
-                            ctx.lineTo(9, 13);
+                            ctx.moveTo(s(2), s(8));
+                            ctx.lineTo(s(14), s(8));
+                            ctx.moveTo(s(9), s(3));
+                            ctx.lineTo(s(14), s(8));
+                            ctx.lineTo(s(9), s(13));
                             ctx.stroke();
                         }
                     }
