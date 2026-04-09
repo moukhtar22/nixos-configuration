@@ -18,6 +18,7 @@
   environment.systemPackages = with pkgs; [
     wget 
     taskwarrior3
+    inotify-tools
     file
     git
     killall

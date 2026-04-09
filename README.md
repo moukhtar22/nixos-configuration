@@ -1,25 +1,25 @@
 ## Previews of my desktop
 
-### You can find all of my wallpapers **[HERE](https://github.com/ilyamiro/shell-wallpapers)**.
+## You can find all of my wallpapers **[HERE](https://github.com/ilyamiro/shell-wallpapers)**.
 
-## FOR ANY PROBLEMS, contact me:
+### FOR ANY PROBLEMS, contact me:
 - Reddit: r/ilyamiro1
 - X/Twitter: @ilyamirox
 - Discord: @ilyamiro
 - Email: ilyamiro.work@gmail.com
 - Telegram: @sacrificeit
 
-### Update 05.04.26
+> [!WARNING]
+> DO NOT LAUNCH THIS AS ROOT!
 
-## WARNING. THIS CAN BREAK YOUR SYSTEM SO PROCEED ON YOUR OWN RISK.  
+> [!NOTE]
+> This installer sends anonymous non-identifying telemetry that helps me debug problems and track the amount of users
 
-### Arch installer now in alpha testing mode available for everyone. A lot of bugs expected. Just run this: 
+### Arch installer now in alpha testing mode available for everyone. Just run this: 
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/ilyamiro/imperative-dots/master/install.sh)"
 ```
-
-## DO NOT LAUNCH THIS AS ROOT!
 
 ---
 

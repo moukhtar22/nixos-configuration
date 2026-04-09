@@ -34,8 +34,11 @@
       ", xf86audiomute, exec, swayosd-client --output-volume mute-toggle"
       ", XF86MonBrightnessDown, exec, swayosd-client --brightness lower"
       ", XF86MonBrightnessUp, exec, swayosd-client --brightness raise"
+
       ", Print, exec, ~/.config/hypr/scripts/screenshot.sh"
       "SHIFT_L, Print, exec, ~/.config/hypr/scripts/screenshot.sh --edit"
+      "SUPER, Print, exec, ~/.config/hypr/scripts/screenshot.sh --full"
+      "SUPER SHIFT_L, Print, exec, ~/.config/hypr/scripts/screenshot.sh --full --edit"
       
       ", XF86PowerOff, exec, bash ~/.config/hypr/scripts/lock.sh"
     ];
@@ -73,7 +76,7 @@
       "$mainMod, O, exec, obsidian"
       "$mainMod, RETURN, exec, $terminal"
 
-      "ALT, F4, exec, bash -c 'if hyprctl activewindow | grep -q \"title: qs-master\"; then ~/.config/hypr/scripts/qs_manager.sh close; else hyprctl dispatch killactive; fi'"
+      "ALT, F4, exec, hyprctl dispatch killactive"
 
       "$mainMod&CTRL, left, movewindow, l"
       "$mainMod&CTRL, right, movewindow, r"
