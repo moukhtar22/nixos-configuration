@@ -323,14 +323,32 @@ Item {
     }
 
     // -------------------------------------------------------------------------
-    // SCHEDULE DATA
+    // SCHEDULE DATA & CONDITIONAL RENDERING
     // -------------------------------------------------------------------------
+    property bool scheduleModuleExists: false
     property var scheduleData: { "header": "Loading Schedule...", "link": "", "lessons": [] }
+
+    // Check if the schedule manager script actually exists before doing anything
+    Process {
+        id: schedulePathChecker
+        command: ["bash", "-c", "[ -f '" + window.scriptsDir + "/schedule/schedule_manager.sh' ] && echo 1 || echo 0"]
+        running: true
+        stdout: StdioCollector {
+            onStreamFinished: {
+                if (this.text.trim() === "1") {
+                    window.scheduleModuleExists = true;
+                    schedulePoller.running = true; // Safe to start polling
+                } else {
+                    window.scheduleModuleExists = false;
+                }
+            }
+        }
+    }
 
     Process {
         id: schedulePoller
         command: ["bash", window.scriptsDir + "/schedule/schedule_manager.sh"]
-        running: true
+        running: false // Handled by schedulePathChecker
         stdout: StdioCollector {
             onStreamFinished: {
                 let txt = this.text.trim();
@@ -343,7 +361,8 @@ Item {
 
     Timer {
         interval: 600000 
-        running: true; repeat: true
+        // Only run the timer if the module actually exists
+        running: window.scheduleModuleExists; repeat: true
         onTriggered: schedulePoller.running = true
     }
 
@@ -559,7 +578,10 @@ Item {
                     Rotation { axis { x: 0; y: 0; z: 1 } angle: centralHub.rollBreath }
                 ]
 
+                // OPTIMIZATION: Moved scale property out of the onPaint function to prevent redrawing every frame.
+                // It now draws once, and scales using the GPU.
                 Canvas {
+                    id: orbitCanvas
                     z: -10
                     x: window.s(-400)   // Widened to prevent clipping when scaled
                     y: window.s(-200)   // Heightened to prevent clipping when scaled
@@ -567,15 +589,16 @@ Item {
                     height: window.s(400)
                     opacity: 0.25
 
-                    property real currentScale: centralHub.orbitBreath
-                    onCurrentScaleChanged: requestPaint()
+                    scale: centralHub.orbitBreath
+
+                    onWidthChanged: requestPaint()
 
                     onPaint: {
                         var ctx = getContext("2d");
                         ctx.clearRect(0, 0, width, height);
                         ctx.beginPath();
-                        var currentRx = window.s(320) * currentScale;
-                        var currentRy = window.s(140) * currentScale;
+                        var currentRx = window.s(320);
+                        var currentRy = window.s(140);
                         for (var i = 0; i <= Math.PI * 2; i += 0.05) {
                             var xx = width/2 + Math.cos(i) * currentRx;
                             var yy = height/2 + Math.sin(i) * currentRy;
@@ -971,6 +994,7 @@ Item {
                             model: 4
 
                             Item {
+                                id: gaugeWrapper
                                 width: window.s(68)
                                 height: window.s(100)
                                 scale: gaugeMa.containsMouse ? 1.15 : 1.0
@@ -1015,13 +1039,16 @@ Item {
                                         anchors.fill: parent
                                         rotation: -90 
                                         
-                                        property real animProgress: parent.parent.gaugeFill
+                                        property real animProgress: gaugeWrapper.gaugeFill
                                         
                                         Behavior on animProgress {
                                             NumberAnimation { duration: 1000; easing.type: Easing.OutExpo }
                                         }
                                         
+                                        // Ensuring canvas draws properly regardless of initialization speed
                                         onAnimProgressChanged: requestPaint()
+                                        onWidthChanged: requestPaint()
+                                        Component.onCompleted: requestPaint()
                                         
                                         onPaint: {
                                             var ctx = getContext("2d");
@@ -1050,7 +1077,7 @@ Item {
                                     
                                     Text {
                                         anchors.centerIn: parent
-                                        text: parent.parent.gaugeVal
+                                        text: gaugeWrapper.gaugeVal
                                         font.family: "JetBrains Mono"
                                         font.weight: Font.Black
                                         font.pixelSize: window.s(14)
@@ -1064,14 +1091,14 @@ Item {
                                     spacing: window.s(4)
                                     
                                     Text { 
-                                        text: parent.parent.gaugeIcon
+                                        text: gaugeWrapper.gaugeIcon
                                         font.family: "Iosevka Nerd Font"
                                         font.pixelSize: window.s(14)
                                         color: gaugeMa.containsMouse ? window.textAccent : window.overlay0
                                         Behavior on color { ColorAnimation { duration: 200 } }
                                     }
                                     Text { 
-                                        text: parent.parent.gaugeLbl
+                                        text: gaugeWrapper.gaugeLbl
                                         font.family: "JetBrains Mono"
                                         font.weight: Font.Bold
                                         font.pixelSize: window.s(12)
@@ -1091,6 +1118,10 @@ Item {
             // =======================================================
             Item {
                 id: bottomSection
+                
+                // CONDITIONAL RENDERING BINDING
+                visible: window.scheduleModuleExists
+                
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
@@ -1110,46 +1141,86 @@ Item {
 
                 Rectangle { anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: Qt.alpha(window.surface1, 0.5) }
 
-                Canvas {
+                // OPTIMIZATION: Separated the massive continuous Canvas path-drawing loop into three pre-rendered hardware-accelerated static layers.
+                Item {
                     anchors.fill: parent
-                    z: -1 
+                    z: -1
                     opacity: 0.15
-                    
-                    property real phase1: 0
-                    property real phase2: 0
-                    property real phase3: 0
-                    
-                    NumberAnimation on phase1 { from: 0; to: Math.PI * 2; duration: 4000; loops: Animation.Infinite; running: true }
-                    NumberAnimation on phase2 { from: 0; to: Math.PI * 2; duration: 5500; loops: Animation.Infinite; running: true }
-                    NumberAnimation on phase3 { from: 0; to: Math.PI * 2; duration: 7000; loops: Animation.Infinite; running: true }
-                    
-                    onPhase1Changed: requestPaint()
-                    
-                    onPaint: {
-                        var ctx = getContext("2d");
-                        ctx.clearRect(0, 0, width, height);
-                        var cy = height / 2;
+                    clip: true
+
+                    // Wave 1 - Mauve
+                    Canvas {
+                        id: wave1
+                        property real wLen: window.s(100) * 2 * Math.PI
+                        width: parent.width + wLen
+                        height: parent.height
                         
-                        ctx.beginPath();
-                        ctx.moveTo(0, cy);
-                        for(var x = 0; x <= width; x += window.s(10)) ctx.lineTo(x, cy + Math.sin(x/window.s(100) + phase1) * window.s(30));
-                        ctx.strokeStyle = window.mauve;
-                        ctx.lineWidth = window.s(2);
-                        ctx.stroke();
+                        NumberAnimation on x { from: 0; to: -wave1.wLen; duration: 4000; loops: Animation.Infinite; running: window.scheduleModuleExists }
                         
-                        ctx.beginPath();
-                        ctx.moveTo(0, cy);
-                        for(var x = 0; x <= width; x += window.s(10)) ctx.lineTo(x, cy + Math.sin(x/window.s(120) - phase2) * window.s(40));
-                        ctx.strokeStyle = window.sapphire;
-                        ctx.lineWidth = window.s(2);
-                        ctx.stroke();
+                        onWidthChanged: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d");
+                            ctx.clearRect(0, 0, width, height);
+                            var cy = height / 2;
+                            ctx.beginPath();
+                            ctx.moveTo(0, cy);
+                            for(var i = 0; i <= width + window.s(20); i += window.s(10)) {
+                                ctx.lineTo(i, cy + Math.sin(i/window.s(100)) * window.s(30));
+                            }
+                            ctx.strokeStyle = window.mauve;
+                            ctx.lineWidth = window.s(2);
+                            ctx.stroke();
+                        }
+                    }
+
+                    // Wave 2 - Sapphire
+                    Canvas {
+                        id: wave2
+                        property real wLen: window.s(120) * 2 * Math.PI
+                        width: parent.width + wLen
+                        height: parent.height
                         
-                        ctx.beginPath();
-                        ctx.moveTo(0, cy);
-                        for(var x = 0; x <= width; x += window.s(10)) ctx.lineTo(x, cy + Math.sin(x/window.s(80) + phase3) * window.s(20));
-                        ctx.strokeStyle = window.peach;
-                        ctx.lineWidth = window.s(2);
-                        ctx.stroke();
+                        NumberAnimation on x { from: -wave2.wLen; to: 0; duration: 5500; loops: Animation.Infinite; running: window.scheduleModuleExists }
+                        
+                        onWidthChanged: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d");
+                            ctx.clearRect(0, 0, width, height);
+                            var cy = height / 2;
+                            ctx.beginPath();
+                            ctx.moveTo(0, cy);
+                            for(var i = 0; i <= width + window.s(20); i += window.s(10)) {
+                                ctx.lineTo(i, cy + Math.sin(i/window.s(120)) * window.s(40));
+                            }
+                            ctx.strokeStyle = window.sapphire;
+                            ctx.lineWidth = window.s(2);
+                            ctx.stroke();
+                        }
+                    }
+
+                    // Wave 3 - Peach
+                    Canvas {
+                        id: wave3
+                        property real wLen: window.s(80) * 2 * Math.PI
+                        width: parent.width + wLen
+                        height: parent.height
+                        
+                        NumberAnimation on x { from: 0; to: -wave3.wLen; duration: 7000; loops: Animation.Infinite; running: window.scheduleModuleExists }
+                        
+                        onWidthChanged: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d");
+                            ctx.clearRect(0, 0, width, height);
+                            var cy = height / 2;
+                            ctx.beginPath();
+                            ctx.moveTo(0, cy);
+                            for(var i = 0; i <= width + window.s(20); i += window.s(10)) {
+                                ctx.lineTo(i, cy + Math.sin(i/window.s(80)) * window.s(20));
+                            }
+                            ctx.strokeStyle = window.peach;
+                            ctx.lineWidth = window.s(2);
+                            ctx.stroke();
+                        }
                     }
                 }
 
