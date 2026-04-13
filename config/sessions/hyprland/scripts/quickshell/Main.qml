@@ -53,9 +53,53 @@ PanelWindow {
     property real animH: 1
     property real animX: 0
     property real animY: 0
+    
+    // NEW: Explicit targets for the inner content wrapper so widgets can override them dynamically
+    property real targetW: 1
+    property real targetH: 1
+
+    // NEW: Global UI Scale mapped from settings.json
+    property real globalUiScale: 1.0
+
+    onGlobalUiScaleChanged: {
+        handleNativeScreenChange();
+    }
+
+    // --- Dynamic Settings Reader ---
+    Process {
+        id: settingsReader
+        command: ["bash", "-c", "cat ~/.config/hypr/settings.json 2>/dev/null || echo '{}'"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try {
+                    if (this.text && this.text.trim().length > 0) {
+                        let parsed = JSON.parse(this.text);
+                        if (parsed.uiScale !== undefined && masterWindow.globalUiScale !== parsed.uiScale) {
+                            masterWindow.globalUiScale = parsed.uiScale;
+                        }
+                    }
+                } catch (e) {
+                    console.log("Error parsing settings.json in main.qml:", e);
+                }
+            }
+        }
+    }
+
+    Timer {
+        id: settingsPollTimer
+        interval: 2000
+        running: true
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: {
+            settingsReader.running = false;
+            settingsReader.running = true;
+        }
+    }
+    // -------------------------------
 
     function getLayout(name) {
-        return Registry.getLayout(name, 0, 0, Screen.width, Screen.height);
+        return Registry.getLayout(name, 0, 0, Screen.width, Screen.height, masterWindow.globalUiScale);
     }
 
     // Automatically recalculates position and scale if the OS resolution changes
@@ -76,6 +120,8 @@ PanelWindow {
             masterWindow.animY = t.ry;
             masterWindow.animW = t.w;
             masterWindow.animH = t.h;
+            masterWindow.targetW = t.w;
+            masterWindow.targetH = t.h;
         }
     }
     // ---------------------------------------
@@ -106,8 +152,9 @@ PanelWindow {
 
         Item {
             anchors.centerIn: parent
-            width: masterWindow.currentActive !== "hidden" && getLayout(masterWindow.currentActive) ? getLayout(masterWindow.currentActive).w : 1
-            height: masterWindow.currentActive !== "hidden" && getLayout(masterWindow.currentActive) ? getLayout(masterWindow.currentActive).h : 1
+            // CHANGE: Now uses the overrideable properties instead of strict registry bindings
+            width: masterWindow.targetW
+            height: masterWindow.targetH
 
             StackView {
                 id: widgetStack
@@ -141,7 +188,7 @@ PanelWindow {
 
     function switchWidget(newWidget, arg) {
         // FIX 1: Immediately update the system state file so the bash manager 
-        // doesn't read stale data during the 250ms morph animations.
+        // doesn't read stale data during the morph animations.
         Quickshell.execDetached(["bash", "-c", "echo '" + newWidget + "' > /tmp/qs_active_widget"]);
 
         prepTimer.stop();
@@ -217,6 +264,8 @@ PanelWindow {
             masterWindow.animY = t.ry;
             masterWindow.animW = t.w;
             masterWindow.animH = t.h;
+            masterWindow.targetW = t.w;
+            masterWindow.targetH = t.h;
 
             let props = newWidget === "wallpaper" ? { "widgetArg": newArg } : {};
             widgetStack.replace(t.comp, props, StackView.Immediate);
@@ -253,6 +302,8 @@ PanelWindow {
         masterWindow.animY = t.ry;
         masterWindow.animW = t.w;
         masterWindow.animH = t.h;
+        masterWindow.targetW = t.w;
+        masterWindow.targetH = t.h;
         
         let props = newWidget === "wallpaper" ? { "widgetArg": arg } : {};
 

@@ -22,7 +22,9 @@
     file
     git
     killall
-    btop
+    btop  
+    mpv
+    zenity
     matugen
     neovim 
     fzf

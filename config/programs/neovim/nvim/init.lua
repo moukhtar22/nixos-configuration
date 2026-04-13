@@ -38,9 +38,9 @@ _G.reload_matugen_colors = function()
       end
     end
 
-    -- Aggressively clear ALL catppuccin and lualine modules from cache
+    -- FIX: Only clear catppuccin. Do NOT clear lualine, or it will leak highlight groups!
     for k, _ in pairs(package.loaded) do
-      if k:match("^catppuccin") or k:match("^lualine") then
+      if k:match("^catppuccin") then
         package.loaded[k] = nil
       end
     end
@@ -79,7 +79,7 @@ _G.reload_matugen_colors = function()
     -- Re-apply the colorscheme
     vim.cmd("colorscheme catppuccin")
 
-    -- Reload lualine dynamically
+    -- Reload lualine dynamically (safely updates without module clearing)
     local ok_lualine, lualine = pcall(require, "lualine")
     if ok_lualine then
       lualine.setup { options = { theme = 'catppuccin' } }
@@ -231,12 +231,25 @@ local uv = vim.uv or vim.loop -- Compat for Nvim 0.9 and 0.10+
 local matugen_path = vim.fn.stdpath("config") .. "/matugen_colors.lua"
 
 local watcher = uv.new_fs_event()
+local reload_timer = nil
+
 watcher:start(matugen_path, {}, vim.schedule_wrap(function(err, filename, events)
   if not err then
-    -- Add a tiny delay to ensure Matugen has finished writing the file
-    vim.defer_fn(function()
+    -- FIX: Debounce the reload to prevent rapid execution which leads to E849
+    if reload_timer then
+      reload_timer:stop()
+      reload_timer:close()
+    end
+    
+    reload_timer = uv.new_timer()
+    reload_timer:start(100, 0, vim.schedule_wrap(function()
       _G.reload_matugen_colors()
-    end, 50) 
+      if reload_timer then
+        reload_timer:stop()
+        reload_timer:close()
+        reload_timer = nil
+      end
+    end))
   end
 end))
 

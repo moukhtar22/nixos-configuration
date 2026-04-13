@@ -55,7 +55,7 @@
       gaps_in = 4;
       gaps_out = 4;
       float_gaps = 6;
-      resize_on_border = true;
+      resize_on_border = true; 
       extend_border_grab_area = 30;
 
     };
@@ -82,6 +82,7 @@
       accel_profile = "flat";
     };
     misc = {
+      focus_on_activate = true;
       font_family = "JetBrains Mono";
       disable_hyprland_logo = true;
       disable_splash_rendering = true;

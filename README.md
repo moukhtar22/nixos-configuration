@@ -1,3 +1,5 @@
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/ilyamiro)
+
 ## Arch installer now in alpha testing mode available for everyone. Just run this: 
 
 ```bash

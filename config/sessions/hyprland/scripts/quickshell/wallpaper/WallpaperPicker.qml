@@ -98,13 +98,20 @@ Item {
 
         const escapeBash = (str) => String(str).replace(/(["\\$`])/g, '\\$1');
         
+        // 2. HARDWARE ADAPTATION: Force Vulkan rendering
+        // FIX: Hardcoded to bypass the Quickshell.env check since the backend is required.
+        const renderOverride = "env WGPU_BACKEND=vulkan ";
+        const randomTransition = window.transitions[Math.floor(Math.random() * window.transitions.length)];
+        
+        // 3. AUTO-REVIVE COMMAND: Ensure daemon is alive before sending IPC commands
+        const ensureDaemonCmd = `if ! pgrep -x "swww-daemon" > /dev/null; then swww-daemon >/dev/null 2>&1 & sleep 0.2; fi`;
+        
         if (window.currentFilter === "Search" && window.hasSearched) {
             let alreadyExists = window.isDownloaded(safeFileName);
             let destFile = window.srcDir + "/" + safeFileName;
             let finalThumb = decodeURIComponent(window.thumbDir.replace("file://", "")) + "/" + safeFileName;
             let tempThumb = decodeURIComponent(window.searchDir.replace("file://", "")) + "/" + safeFileName;
             let mapFile = Quickshell.env("HOME") + "/.cache/wallpaper_picker/search_map.txt";
-            const randomTransition = window.transitions[Math.floor(Math.random() * window.transitions.length)];
 
             if (alreadyExists) {
                 const applyScript = `
@@ -119,14 +126,15 @@ Item {
                         cp "$DEST_FILE" /tmp/lock_bg.png || true
                         pkill mpvpaper || true
                         
+                        ${ensureDaemonCmd}
+                        
                         # Run matugen completely detached so it doesn't block swww execution
                         ( matugen image "$FINAL_THUMB" || true; bash "$RELOAD_SCRIPT" || true ) &
                         MATUGEN_PID=$!
                         
-                        # DETERMINISTIC LOOP: Force swww to succeed.
-                        # It will poll every 50ms up to 20 times until the compositor accepts the frame.
+                        # DETERMINISTIC LOOP
                         for i in {1..20}; do
-                            if swww img "$DEST_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 >/dev/null 2>&1; then
+                            if ${renderOverride}swww img "$DEST_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 >/dev/null 2>&1; then
                                 break
                             fi
                             sleep 0.05
@@ -168,12 +176,14 @@ Item {
                             cp "$DEST_FILE" /tmp/lock_bg.png || true
                             pkill mpvpaper || true
                             
+                            ${ensureDaemonCmd}
+                            
                             ( matugen image "$FINAL_THUMB" || true; bash "$RELOAD_SCRIPT" || true ) &
                             MATUGEN_PID=$!
                             
                             # DETERMINISTIC LOOP
                             for i in {1..20}; do
-                                if swww img "$DEST_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 >/dev/null 2>&1; then
+                                if ${renderOverride}swww img "$DEST_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 >/dev/null 2>&1; then
                                     break
                                 fi
                                 sleep 0.05
@@ -202,11 +212,10 @@ Item {
             wallpaperCmd = `mpvpaper -o 'loop --no-audio --hwdec=auto --profile=high-quality --video-sync=display-resample --interpolation --tscale=oversample' '*' "$WALL_FILE"`
             lockBgCmd = `cp "$THUMB_FILE" /tmp/lock_bg.png`
         } else {
-            const randomTransition = window.transitions[Math.floor(Math.random() * window.transitions.length)]
-            // Inject the deterministic loop directly into the standard command variable
             wallpaperCmd = `
+                ${ensureDaemonCmd}
                 for i in {1..20}; do
-                    if swww img "$WALL_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 >/dev/null 2>&1; then
+                    if ${renderOverride}swww img "$WALL_FILE" --transition-type ${randomTransition} --transition-pos 0.5,0.5 --transition-fps 144 --transition-duration 1 >/dev/null 2>&1; then
                         break
                     fi
                     sleep 0.05
@@ -235,9 +244,7 @@ Item {
             ) </dev/null >/dev/null 2>&1 & disown
         `
         Quickshell.execDetached(["bash", "-c", fullScript])
-    }
-
-    // -------------------------------------------------------------------------
+    }    // -------------------------------------------------------------------------
     // PERSISTENT SETTINGS
     // -------------------------------------------------------------------------
     Settings {
@@ -490,7 +497,12 @@ Item {
     readonly property string homeDir: "file://" + Quickshell.env("HOME")
     readonly property string thumbDir: homeDir + "/.cache/wallpaper_picker/thumbs"
     readonly property string searchDir: homeDir + "/.cache/wallpaper_picker/search_thumbs"
-    readonly property string srcDir: Quickshell.env("HOME") + "/Images/Wallpapers"
+    readonly property string srcDir: {
+    	const dir = Quickshell.env("WALLPAPER_DIR")
+    	return (dir && dir !== "") 
+        ? dir 
+        : Quickshell.env("HOME") + "/Pictures/Wallpapers"
+    }
 
     readonly property var transitions: ["grow", "outer", "any", "wipe", "wave", "pixel", "center"]
 

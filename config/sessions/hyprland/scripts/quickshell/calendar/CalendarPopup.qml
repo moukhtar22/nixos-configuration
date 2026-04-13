@@ -48,7 +48,6 @@ Item {
         }
     }
 
-  
     // -------------------------------------------------------------------------
     // COLORS (Dynamic Matugen Palette)
     // -------------------------------------------------------------------------
@@ -328,6 +327,10 @@ Item {
     property bool scheduleModuleExists: false
     property var scheduleData: { "header": "Loading Schedule...", "link": "", "lessons": [] }
 
+    // Dynamic offset based on whether the schedule module exists
+    property real centerOffset: window.scheduleModuleExists ? window.s(-100) : 0
+    Behavior on centerOffset { NumberAnimation { duration: 600; easing.type: Easing.OutQuart } }
+
     // Check if the schedule manager script actually exists before doing anything
     Process {
         id: schedulePathChecker
@@ -340,6 +343,15 @@ Item {
                     schedulePoller.running = true; // Safe to start polling
                 } else {
                     window.scheduleModuleExists = false;
+                    
+                    // --- DYNAMICALLY SHRINK THE MASTER WINDOW ---
+                    // Reach out to the global 'masterWindow' ID and update both
+                    // the morphing wrapper (animH) and the content wrapper (targetH)
+                    if (typeof masterWindow !== "undefined") {
+                        let newHeight = window.s(510);
+                        masterWindow.animH = newHeight;
+                        masterWindow.targetH = newHeight;
+                    }
                 }
             }
         }
@@ -498,7 +510,7 @@ Item {
             // Big Parallax Weather Icon (Tied to Weather Transition)
             Text {
                 anchors.centerIn: parent
-                anchors.verticalCenterOffset: window.s(-100)
+                anchors.verticalCenterOffset: window.centerOffset
                 text: window.weatherData && window.weatherData.forecast[window.weatherView] ? window.weatherData.forecast[window.weatherView].icon : ""
                 font.family: "Iosevka Nerd Font"
                 font.pixelSize: window.s(800)
@@ -526,7 +538,7 @@ Item {
             Item {
                 id: centralHub
                 anchors.centerIn: parent
-                anchors.verticalCenterOffset: window.s(-100)
+                anchors.verticalCenterOffset: window.centerOffset
                 width: window.s(1); height: window.s(1) 
                 z: 5
 
